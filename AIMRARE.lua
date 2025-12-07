@@ -1,7 +1,7 @@
 --[[
     AimRare Hub 
     Version: 6.1 (Fixed)
-    Author: Ben (Fix by Gemini)
+    Author: Ben 
     Optimizations:
     - Fixed memory leaks in Skeleton ESP (Table reuse).
     - Optimized Raycasting (Params reuse).
