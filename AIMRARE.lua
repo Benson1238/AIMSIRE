@@ -1,13 +1,14 @@
 --[[
     AimRare Hub 
-    Version: 6.0 (Optimized)
-    Author: Ben 
+    Version: 6.1 (Fixed)
+    Author: Ben (Fix by Gemini)
     Optimizations:
     - Fixed memory leaks in Skeleton ESP (Table reuse).
     - Optimized Raycasting (Params reuse).
     - Aimbot target scanning now only runs when aiming (saves CPU).
     - Added proper RenderStepped disconnection on Unload.
     - Localized Math and Vector functions for speed.
+    - Fixed ESP Box sizing bug.
 ]]
 
 -- Services
@@ -108,7 +109,7 @@ pcall(function()
     
     -- Initialize Watermark
     WatermarkText = Drawing.new("Text")
-    WatermarkText.Text = "AimRare Hub v6.0 | FPS: 60"
+    WatermarkText.Text = "AimRare Hub v6.1 | FPS: 60"
     WatermarkText.Size = 18
     WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 200, 30)
     WatermarkText.Color = Color3new(1, 1, 1)
@@ -120,13 +121,13 @@ end)
 -- UI SYSTEM
 -------------------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AimRareHubUI_v6.0"
+ScreenGui.Name = "AimRareHubUI_v6.1"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.DisplayOrder = 10
 
-if CoreGui:FindFirstChild("AimRareHubUI_v6.0") then CoreGui["AimRareHubUI_v6.0"]:Destroy() end
-if LocalPlayer.PlayerGui:FindFirstChild("AimRareHubUI_v6.0") then LocalPlayer.PlayerGui["AimRareHubUI_v6.0"]:Destroy() end
+if CoreGui:FindFirstChild("AimRareHubUI_v6.1") then CoreGui["AimRareHubUI_v6.1"]:Destroy() end
+if LocalPlayer.PlayerGui:FindFirstChild("AimRareHubUI_v6.1") then LocalPlayer.PlayerGui["AimRareHubUI_v6.1"]:Destroy() end
 
 if pcall(function() ScreenGui.Parent = CoreGui end) then else ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
@@ -343,11 +344,11 @@ local function ShowUpdateLog()
     local LogCorner = Instance.new("UICorner", LogFrame); LogCorner.CornerRadius = UDim.new(0, 8)
     
     local LogTitle = Instance.new("TextLabel", LogFrame)
-    LogTitle.Size = UDim2.new(1, 0, 0, 30); LogTitle.BackgroundTransparency = 1; LogTitle.Text = "UPDATE LOG v6.0"; LogTitle.TextColor3 = Theme.Accent; LogTitle.Font = Enum.Font.GothamBlack; LogTitle.TextSize = 16; LogTitle.ZIndex = 11
+    LogTitle.Size = UDim2.new(1, 0, 0, 30); LogTitle.BackgroundTransparency = 1; LogTitle.Text = "UPDATE LOG v6.1"; LogTitle.TextColor3 = Theme.Accent; LogTitle.Font = Enum.Font.GothamBlack; LogTitle.TextSize = 16; LogTitle.ZIndex = 11
     
     local LogText = Instance.new("TextLabel", LogFrame)
     LogText.Size = UDim2.new(0.9, 0, 0.6, 0); LogText.Position = UDim2.new(0.05, 0, 0.2, 0); LogText.BackgroundTransparency = 1
-    LogText.Text = "- VISUALS: Complete UI Overhaul (Cleaner, Better).\n- TAB: Settings is now a dedicated tab.\n- NEW: Added toggleable Watermark.\n- REMOVED: Silent Aim (Legacy)."
+    LogText.Text = "- VISUALS: Fixed ESP Box size being too small.\n- VISUALS: Complete UI Overhaul.\n- TAB: Settings is now a dedicated tab."
     LogText.TextColor3 = Theme.Text; LogText.Font = Enum.Font.GothamMedium; LogText.TextSize = 14; LogText.TextWrapped = true; LogText.ZIndex = 11
     
     local CloseBtn = Instance.new("TextButton", LogFrame)
@@ -819,7 +820,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
     
     -- Update Watermark FPS
     if WatermarkText and Settings.ShowWatermark then
-        WatermarkText.Text = "AimRare Hub v6.0 | FPS: " .. MathFloor(Workspace:GetRealPhysicsFPS())
+        WatermarkText.Text = "AimRare Hub v6.1 | FPS: " .. MathFloor(Workspace:GetRealPhysicsFPS())
         WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 220, 20)
     end
 
@@ -883,8 +884,9 @@ RenderConnection = RunService.RenderStepped:Connect(function()
         local objs = cache.Objects
 
         if onScreen then
-            local boxHeight = (Camera.ViewportSize.Y / vector.Z) * 4.5
-            local boxWidth = boxHeight / 1.5
+            -- FIX APPLIED: Increased height multiplier to 7 and adjusted width divisor to 2
+            local boxHeight = (Camera.ViewportSize.Y / vector.Z) * 7
+            local boxWidth = boxHeight / 2
             local boxPos = Vector2new(vector.X - boxWidth / 2, vector.Y - boxHeight / 2)
 
             -- Box ESP
