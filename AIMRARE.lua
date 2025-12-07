@@ -1,5 +1,5 @@
 --[[
-    AimRare Hub - Advanced Educational Script
+    AimRare Hub 
     Version: 6.0 (Optimized)
     Author: Ben 
     Optimizations:
