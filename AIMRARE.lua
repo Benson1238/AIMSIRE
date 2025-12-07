@@ -1,8 +1,7 @@
 --[[
     AimRare Hub - Advanced Educational Script
     Version: 6.0 (Optimized)
-    Author: Ben (Updated by Gemini)
-    
+    Author: Ben 
     Optimizations:
     - Fixed memory leaks in Skeleton ESP (Table reuse).
     - Optimized Raycasting (Params reuse).
