@@ -1,7 +1,7 @@
 --[[
     AIMSIRE - Optimized Modular Refactor
     Version: 2.1 (Performance & Logic Fixes)
-    
+    Author: Ben and UnerWartT
     Changelog v2.1:
     - Aimlock: Added "Sticky Target" logic (reduces CPU usage by ~40%)
     - Visuals: Optimized Render Loop
