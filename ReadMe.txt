@@ -8,12 +8,7 @@ AimRare Hub is a lightweight, optimized script hub featuring Legit Aimbot
 and comprehensive ESP visuals. This version focuses on performance,
 stability, and visual accuracy.
 
--- SPECIAL THANKS & CREDITS --
-A massive shoutout to Gemini AI for the technical assistance on this update.
-Gemini was instrumental in fixing several critical errors that I (Ben) couldn't
-solve alone, specifically the complex screen-coordinate math required for
-the ESP Box sizing. This ensures the boxes now scale perfectly regardless
-of distance or FOV changes.
+
 
 -- FEATURES --
 [+] Visuals (ESP)
