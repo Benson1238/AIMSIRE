@@ -1,12 +1,12 @@
 --[[
-    AimRare Hub 
-    Version: 6.3 (Optimized)
+    AimRare Hub
+    Version: 6.4 (Optimized)
     Author: Ben
     Optimizations:
-    - Reduced ESP workload when all ESP features are disabled.
-    - Hardened wall-check raycast ignore list (no nil instances).
-    - Skeleton lines now cleanly hide when body parts disappear.
-    - Version strings unified and UI naming corrected.
+    - Unified versioning through a single constant used by UI and watermark labels.
+    - FOV circle now mirrors live slider/radius changes without requiring a reload.
+    - Raycast ignore list cleared each query to prevent stale entries from previous casts.
+    - Watermark visibility updates instantly with the toggle instead of only at creation time.
 ]]
 
 -- Services
@@ -18,6 +18,7 @@ local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 -- Locals & Micro-optimizations
+local VERSION = "6.4"
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local Vector2new = Vector2.new
@@ -108,7 +109,7 @@ pcall(function()
     
     -- Initialize Watermark
     WatermarkText = Drawing.new("Text")
-    WatermarkText.Text = "AimRare Hub v6.3 | FPS: 60"
+    WatermarkText.Text = "AimRare Hub v" .. VERSION .. " | FPS: 60"
     WatermarkText.Size = 18
     WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 200, 30)
     WatermarkText.Color = Color3new(1, 1, 1)
@@ -120,13 +121,13 @@ end)
 -- UI SYSTEM
 -------------------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AimRareHubUI_v6.3"
+ScreenGui.Name = "AimRareHubUI_v" .. VERSION
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.DisplayOrder = 10
 
-if CoreGui:FindFirstChild("AimRareHubUI_v6.3") then CoreGui["AimRareHubUI_v6.3"]:Destroy() end
-if LocalPlayer.PlayerGui:FindFirstChild("AimRareHubUI_v6.3") then LocalPlayer.PlayerGui["AimRareHubUI_v6.3"]:Destroy() end
+if CoreGui:FindFirstChild("AimRareHubUI_v" .. VERSION) then CoreGui["AimRareHubUI_v" .. VERSION]:Destroy() end
+if LocalPlayer.PlayerGui:FindFirstChild("AimRareHubUI_v" .. VERSION) then LocalPlayer.PlayerGui["AimRareHubUI_v" .. VERSION]:Destroy() end
 
 if pcall(function() ScreenGui.Parent = CoreGui end) then else ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
@@ -343,11 +344,11 @@ local function ShowUpdateLog()
     local LogCorner = Instance.new("UICorner", LogFrame); LogCorner.CornerRadius = UDim.new(0, 8)
     
     local LogTitle = Instance.new("TextLabel", LogFrame)
-    LogTitle.Size = UDim2.new(1, 0, 0, 30); LogTitle.BackgroundTransparency = 1; LogTitle.Text = "UPDATE LOG v6.3"; LogTitle.TextColor3 = Theme.Accent; LogTitle.Font = Enum.Font.GothamBlack; LogTitle.TextSize = 16; LogTitle.ZIndex = 11
+    LogTitle.Size = UDim2.new(1, 0, 0, 30); LogTitle.BackgroundTransparency = 1; LogTitle.Text = "UPDATE LOG v" .. VERSION; LogTitle.TextColor3 = Theme.Accent; LogTitle.Font = Enum.Font.GothamBlack; LogTitle.TextSize = 16; LogTitle.ZIndex = 11
     
     local LogText = Instance.new("TextLabel", LogFrame)
     LogText.Size = UDim2.new(0.9, 0, 0.6, 0); LogText.Position = UDim2.new(0.05, 0, 0.2, 0); LogText.BackgroundTransparency = 1
-    LogText.Text = "- ESP now sleeps when features are off to save FPS.\n- Raycast ignore list hardened to prevent nil errors.\n- Skeleton lines hide instantly if a limb vanishes.\n- Version labels and UI IDs updated to 6.3."
+    LogText.Text = "- Unified version tags across watermark, UI, and log popups.\n- FOV circle radius follows live settings and no longer needs reloads.\n- Raycast ignore list resets each check to avoid stale instances.\n- Watermark visibility updates immediately when toggled."
     LogText.TextColor3 = Theme.Text; LogText.Font = Enum.Font.GothamMedium; LogText.TextSize = 14; LogText.TextWrapped = true; LogText.ZIndex = 11
     
     local CloseBtn = Instance.new("TextButton", LogFrame)
@@ -762,20 +763,21 @@ end
 -- HELPER: Wall Check Raycast (Optimized)
 local function IsVisible(target)
     if not target or not target.Character or not target.Character:FindFirstChild(Settings.AimPart) then return false end
-    
+
     local origin = Camera.CFrame.Position
     local targetPos = target.Character[Settings.AimPart].Position
     local direction = targetPos - origin
-    
+
     -- Optimize: Reuse RayParams instead of creating new ones
+    table.clear(RayIgnore)
     RayIgnore[1] = LocalPlayer.Character or Workspace.CurrentCamera
     RayIgnore[2] = target.Character
     RayParams.FilterDescendantsInstances = RayIgnore
-    
+
     local result = Workspace:Raycast(origin, direction, RayParams)
-    
+
     if result then return false end
-    return true 
+    return true
 end
 
 -- Updated Target Selector with FOV Argument
@@ -841,13 +843,17 @@ RenderConnection = RunService.RenderStepped:Connect(function()
     -- Draw Legit Circle
     if FOV_Circle_Legit then
         FOV_Circle_Legit.Position = mouseLoc
+        FOV_Circle_Legit.Radius = Settings.AimbotFOV
         FOV_Circle_Legit.Visible = Settings.AimbotEnabled
     end
-    
+
     -- Update Watermark FPS
-    if WatermarkText and Settings.ShowWatermark then
-        WatermarkText.Text = "AimRare Hub v6.3 | FPS: " .. MathFloor(Workspace:GetRealPhysicsFPS())
-        WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 220, 20)
+    if WatermarkText then
+        WatermarkText.Visible = Settings.ShowWatermark
+        if Settings.ShowWatermark then
+            WatermarkText.Text = "AimRare Hub v" .. VERSION .. " | FPS: " .. MathFloor(Workspace:GetRealPhysicsFPS())
+            WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 220, 20)
+        end
     end
 
     -- AIMBOT LOGIC
