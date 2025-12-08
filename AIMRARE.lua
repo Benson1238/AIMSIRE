@@ -5,7 +5,7 @@
     Changelog:
     - Added multi-mode aim activation with secondary bind and prioritization controls.
     - Expanded prediction with multiple models, smoothing, and curve tuning plus ESP color profiles.
-    - Throttled ESP rendering with FPS-safe skeletons and configurable visibility checks.
+    - Swapped Fluent UI loader to a stable mirror to prevent 404 issues and restore UI availability.
 ]]
 
 -- Services
@@ -122,7 +122,7 @@ end)
 local UPDATE_LOG = {
     "Advanced prediction modes with curve tuning and smoothing",
     "New aim activation modes, secondary bind, and target prioritization",
-    "ESP throttling with FPS-safe skeletons and expanded color profiles"
+    "Fluent UI loader now uses a stable mirror to avoid 404 errors and restore the UI"
 }
 
 local function GetOptionValue(flag, fallback)
@@ -408,7 +408,7 @@ local Fluent
 local FluentWindow
 local function SetupUI()
     local success, lib = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/UI-Libs/main/Fluent/Library.lua"))()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/rewite12/FluentUIMirror/main/Library.lua"))()
     end)
 
     if success and lib then
