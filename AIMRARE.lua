@@ -1,11 +1,11 @@
 --[[
     AimRare Hub
-    Version: 7.0 (Full Customization)
+    Version: 7.1 (Customization & Stability)
     Author: Ben
     Changelog:
-    - Adopted native Fluent keybind and colorpicker controls for full customization.
-    - Added configurable prediction speed for better leading on varied targets.
-    - Simplified input handling and refreshed visuals with dynamic colors.
+    - Added multi-mode aim activation with secondary bind and prioritization controls.
+    - Expanded prediction with multiple models, smoothing, and curve tuning plus ESP color profiles.
+    - Throttled ESP rendering with FPS-safe skeletons and configurable visibility checks.
 ]]
 
 -- Services
@@ -16,10 +16,12 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- Locals & Micro-optimizations
-local VERSION = "7.0 (Full Customization)"
+local VERSION = "7.1 (Customization & Stability)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
+local DEFAULT_TEAM_COLOR = Color3.fromRGB(65, 170, 255)
+local DEFAULT_LOW_HEALTH_COLOR = Color3.fromRGB(255, 200, 65)
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local Vector2new = Vector2.new
@@ -41,6 +43,9 @@ local Settings = {
     NameESP = false,
     HealthESP = false,
     TeamCheck = false,
+    FPSSafeSkeleton = false,
+    ESPUpdateRate = 60,
+    LowHealthThreshold = 30,
 
     -- Aimbot Main
     AimbotEnabled = false,
@@ -49,6 +54,11 @@ local Settings = {
     AimbotHitChance = 100,
     AimPart = "Head",
     PredictionSpeed = 1000,
+    PredictionMode = "Linear",
+    PredictionCurve = 1,
+    PredictionSmoothing = 0.2,
+    AimMode = "Hold",
+    TargetPriority = "Closest to crosshair",
 
     -- UI Control
     ShowWatermark = true,
@@ -56,6 +66,8 @@ local Settings = {
     -- Checks
     WallCheck = false,
     AliveCheck = true,
+    VisibilityDelay = 0,
+    IgnoreAccessories = false,
 }
 
 -- Constants for Skeleton ESP (Moved out of loop for performance)
@@ -80,6 +92,11 @@ local RayParams = RaycastParams.new() -- Create once, reuse later
 RayParams.FilterType = Enum.RaycastFilterType.Exclude
 RayParams.IgnoreWater = true
 local RayIgnore = {}
+local LastVisibilityResult = {}
+local LastVelocityCache = {}
+local EspAccumulator = 0
+local AimToggleState = false
+local LastPrimaryState, LastSecondaryState = false, false
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
@@ -103,9 +120,9 @@ pcall(function()
 end)
 
 local UPDATE_LOG = {
-    "Upgraded to native Fluent keybind and colorpicker controls for customization",
-    "Added adjustable prediction speed for improved target leading",
-    "Simplified input handling and refreshed dynamic visuals"
+    "Advanced prediction modes with curve tuning and smoothing",
+    "New aim activation modes, secondary bind, and target prioritization",
+    "ESP throttling with FPS-safe skeletons and expanded color profiles"
 }
 
 local function GetOptionValue(flag, fallback)
@@ -113,6 +130,54 @@ local function GetOptionValue(flag, fallback)
         return Fluent.Options[flag].Value
     end
     return fallback
+end
+
+local function GetEspInterval()
+    local hz = math.clamp(Settings.ESPUpdateRate or 60, 1, 240)
+    return 1 / hz
+end
+
+local function GetBindState(flag)
+    local opt = Fluent and Fluent.Options and Fluent.Options[flag]
+    if opt and opt.GetState then
+        return opt:GetState()
+    end
+    if opt and opt.Value ~= nil then
+        return opt.Value
+    end
+    return false
+end
+
+local function UpdateAimToggle(primaryState, secondaryState)
+    if Settings.AimMode ~= "Toggle" then
+        AimToggleState = false
+        LastPrimaryState = primaryState
+        LastSecondaryState = secondaryState
+        return
+    end
+
+    if primaryState and not LastPrimaryState then
+        AimToggleState = not AimToggleState
+    end
+    if secondaryState and not LastSecondaryState then
+        AimToggleState = not AimToggleState
+    end
+
+    LastPrimaryState = primaryState
+    LastSecondaryState = secondaryState
+end
+
+local function ShouldAim(primaryState, secondaryState)
+    if not Settings.AimbotEnabled then return false end
+
+    if Settings.AimMode == "Always-On" then
+        return true
+    elseif Settings.AimMode == "Toggle" then
+        UpdateAimToggle(primaryState, secondaryState)
+        return AimToggleState
+    end
+
+    return primaryState or secondaryState
 end
 
 -------------------------------------------------------------------------
@@ -179,6 +244,8 @@ local function removeESP(player)
         end
         ESP_Cache[player] = nil
     end
+    LastVelocityCache[player] = nil
+    LastVisibilityResult[player] = nil
 end
 Players.PlayerRemoving:Connect(removeESP)
 
@@ -211,6 +278,12 @@ end
 local function IsVisible(target)
     if not target or not target.Character or not target.Character:FindFirstChild(Settings.AimPart) then return false end
 
+    local now = tick()
+    local last = LastVisibilityResult[target]
+    if last and Settings.VisibilityDelay > 0 and (now - last.Time) < Settings.VisibilityDelay then
+        return last.Visible
+    end
+
     local origin = Camera.CFrame.Position
     local targetPos = target.Character[Settings.AimPart].Position
     local direction = targetPos - origin
@@ -218,12 +291,24 @@ local function IsVisible(target)
     table.clear(RayIgnore)
     RayIgnore[1] = LocalPlayer.Character or Workspace.CurrentCamera
     RayIgnore[2] = target.Character
+
+    if Settings.IgnoreAccessories and target.Character then
+        local index = 3
+        for _, accessory in ipairs(target.Character:GetChildren()) do
+            if accessory:IsA("Accessory") and accessory:FindFirstChild("Handle") then
+                RayIgnore[index] = accessory
+                index += 1
+            end
+        end
+    end
+
     RayParams.FilterDescendantsInstances = RayIgnore
 
     local result = Workspace:Raycast(origin, direction, RayParams)
+    local visible = result == nil
 
-    if result then return false end
-    return true
+    LastVisibilityResult[target] = { Time = now, Visible = visible }
+    return visible
 end
 
 -- Predict target movement for smoother aim leading
@@ -243,18 +328,37 @@ local function PredictAimPosition(target)
         velocity = aimPart.AssemblyLinearVelocity
     end
 
+    local cached = LastVelocityCache[target]
+    if cached then
+        velocity = cached:Lerp(velocity, math.clamp(Settings.PredictionSmoothing, 0, 1))
+    end
+    LastVelocityCache[target] = velocity
+
     local distance = (aimPart.Position - Camera.CFrame.Position).Magnitude
     local speedDivisor = Settings.PredictionSpeed > 0 and Settings.PredictionSpeed or 700
-    local predictionTime = math.clamp(distance / speedDivisor, 0, 1) -- distance-scaled leading
+    local baseTime = math.clamp(distance / speedDivisor, 0, 1) -- distance-scaled leading
+    local mode = Settings.PredictionMode
+    local curve = math.max(Settings.PredictionCurve, 0.1)
 
-    return aimPart.Position + (velocity * predictionTime)
+    if mode == "Advanced" then
+        local horizontal = Vector3.new(velocity.X, 0, velocity.Z) * (baseTime * curve)
+        local vertical = Vector3.new(0, velocity.Y, 0) * (baseTime * (curve * 0.5))
+        return aimPart.Position + horizontal + vertical
+    elseif mode == "High-Precision" then
+        local adjustedTime = math.clamp(baseTime * curve * 1.5, 0, 1.5)
+        local lead = velocity * adjustedTime
+        return aimPart.Position + lead
+    end
+
+    return aimPart.Position + (velocity * baseTime * curve)
 end
 
 -- Updated Target Selector with FOV Argument
 local function GetClosestPlayerToMouse(fovLimit)
     local closestPlayer = nil
-    local shortestDistance = fovLimit
+    local bestScore = math.huge
     local mousePos = UserInputService:GetMouseLocation()
+    local priority = Settings.TargetPriority
 
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(Settings.AimPart) then
@@ -267,10 +371,29 @@ local function GetClosestPlayerToMouse(fovLimit)
             local pos, onScreen = Camera:WorldToViewportPoint(player.Character[Settings.AimPart].Position)
 
             if onScreen then
-                local distance = (Vector2new(pos.X, pos.Y) - mousePos).Magnitude
-                if distance < shortestDistance then
-                    closestPlayer = player
-                    shortestDistance = distance
+                local cursorDistance = (Vector2new(pos.X, pos.Y) - mousePos).Magnitude
+                if cursorDistance < fovLimit then
+                    local score = cursorDistance
+
+                    if priority == "Lowest distance" then
+                        local root = player.Character:FindFirstChild("HumanoidRootPart")
+                        score = root and (root.Position - Camera.CFrame.Position).Magnitude or score
+                    elseif priority == "Lowest health" then
+                        score = hum and hum.Health or score
+                    elseif priority == "Highest threat" then
+                        local root = player.Character:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local dirToLocal = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
+                                and (LocalPlayer.Character.HumanoidRootPart.Position - root.Position).Unit or Vector3.new(0,0,0)
+                            local look = root.CFrame.LookVector
+                            score = 1 - math.clamp(look:Dot(dirToLocal), -1, 1)
+                        end
+                    end
+
+                    if score < bestScore then
+                        closestPlayer = player
+                        bestScore = score
+                    end
                 end
             end
         end
@@ -389,6 +512,62 @@ local function SetupUI()
             end
         })
 
+        legitTab:AddKeybind({
+            Title = "Secondary AimBind",
+            Default = Enum.UserInputType.MouseButton3,
+            Mode = "Hold",
+            Flag = "AimBindSecondary"
+        })
+
+        legitTab:AddDropdown({
+            Title = "Aim Mode",
+            Values = {"Hold", "Toggle", "Always-On"},
+            Default = Settings.AimMode,
+            Callback = function(value)
+                Settings.AimMode = value
+            end
+        })
+
+        legitTab:AddDropdown({
+            Title = "Target Priority",
+            Values = {"Closest to crosshair", "Lowest distance", "Lowest health", "Highest threat"},
+            Default = Settings.TargetPriority,
+            Callback = function(value)
+                Settings.TargetPriority = value
+            end
+        })
+
+        legitTab:AddDropdown({
+            Title = "Prediction Mode",
+            Values = {"Linear", "Advanced", "High-Precision"},
+            Default = Settings.PredictionMode,
+            Callback = function(value)
+                Settings.PredictionMode = value
+            end
+        })
+
+        legitTab:AddSlider({
+            Title = "Prediction Curve",
+            Default = Settings.PredictionCurve,
+            Min = 0.25,
+            Max = 2.5,
+            Rounding = 2,
+            Callback = function(value)
+                Settings.PredictionCurve = value
+            end
+        })
+
+        legitTab:AddSlider({
+            Title = "Prediction Smoothing",
+            Default = Settings.PredictionSmoothing,
+            Min = 0,
+            Max = 1,
+            Rounding = 2,
+            Callback = function(value)
+                Settings.PredictionSmoothing = value
+            end
+        })
+
         -- Visuals
         visualsTab:AddToggle({
             Title = "Box ESP",
@@ -436,6 +615,48 @@ local function SetupUI()
             Flag = "EnemyESPColor"
         })
 
+        visualsTab:AddColorpicker({
+            Title = "Teammate ESP Color",
+            Default = DEFAULT_TEAM_COLOR,
+            Flag = "TeamESPColor"
+        })
+
+        visualsTab:AddColorpicker({
+            Title = "Low Health ESP Color",
+            Default = DEFAULT_LOW_HEALTH_COLOR,
+            Flag = "LowHealthESPColor"
+        })
+
+        visualsTab:AddSlider({
+            Title = "Low Health Threshold",
+            Default = Settings.LowHealthThreshold,
+            Min = 5,
+            Max = 75,
+            Rounding = 0,
+            Callback = function(value)
+                Settings.LowHealthThreshold = value
+            end
+        })
+
+        visualsTab:AddSlider({
+            Title = "ESP Update Rate (Hz)",
+            Default = Settings.ESPUpdateRate,
+            Min = 30,
+            Max = 120,
+            Rounding = 0,
+            Callback = function(value)
+                Settings.ESPUpdateRate = value
+            end
+        })
+
+        visualsTab:AddToggle({
+            Title = "FPS Safe Skeleton",
+            Default = Settings.FPSSafeSkeleton,
+            Callback = function(value)
+                Settings.FPSSafeSkeleton = value
+            end
+        })
+
         -- Settings
         settingsTab:AddToggle({
             Title = "Show Watermark",
@@ -443,6 +664,25 @@ local function SetupUI()
             Callback = function(value)
                 Settings.ShowWatermark = value
                 if WatermarkText then WatermarkText.Visible = value end
+            end
+        })
+
+        settingsTab:AddSlider({
+            Title = "Visibility Check Delay",
+            Default = Settings.VisibilityDelay,
+            Min = 0,
+            Max = 1,
+            Rounding = 2,
+            Callback = function(value)
+                Settings.VisibilityDelay = value
+            end
+        })
+
+        settingsTab:AddToggle({
+            Title = "Ignore Accessories in Raycast",
+            Default = Settings.IgnoreAccessories,
+            Callback = function(value)
+                Settings.IgnoreAccessories = value
             end
         })
 
@@ -487,13 +727,16 @@ SetupUI()
 -------------------------------------------------------------------------
 -- RENDER LOOP (OPTIMIZED)
 -------------------------------------------------------------------------
-RenderConnection = RunService.RenderStepped:Connect(function()
+RenderConnection = RunService.RenderStepped:Connect(function(dt)
     if Workspace.CurrentCamera ~= Camera then
         Camera = Workspace.CurrentCamera
     end
     local mouseLoc = UserInputService:GetMouseLocation()
-    local espColor = GetOptionValue("EnemyESPColor", DEFAULT_ESP_COLOR)
+    local enemyColor = GetOptionValue("EnemyESPColor", DEFAULT_ESP_COLOR)
+    local teamColor = GetOptionValue("TeamESPColor", DEFAULT_TEAM_COLOR)
+    local lowHealthColor = GetOptionValue("LowHealthESPColor", DEFAULT_LOW_HEALTH_COLOR)
     local fovColor = GetOptionValue("FOVCircleColor", DEFAULT_FOV_COLOR)
+    local fps = Workspace:GetRealPhysicsFPS()
 
     -- Draw Legit Circle
     if FOV_Circle_Legit then
@@ -507,27 +750,33 @@ RenderConnection = RunService.RenderStepped:Connect(function()
     if WatermarkText then
         WatermarkText.Visible = Settings.ShowWatermark
         if Settings.ShowWatermark then
-            WatermarkText.Text = "AimRare Hub v" .. VERSION .. " | FPS: " .. MathFloor(Workspace:GetRealPhysicsFPS())
-            WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 220, 20)
+            local targetName = LegitTarget and LegitTarget.Name or "None"
+            WatermarkText.Text = string.format(
+                "AimRare Hub v%s | FPS: %d | Target: %s | Pred: %d",
+                VERSION,
+                MathFloor(fps),
+                targetName,
+                Settings.PredictionSpeed
+            )
+            WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 320, 20)
         end
     end
 
     -- AIMBOT LOGIC
-    if Settings.AimbotEnabled then
-        local aimBind = Fluent and Fluent.Options and Fluent.Options.AimBind
-        local isAiming = aimBind and aimBind.GetState and aimBind:GetState() or false
+    local primaryState = GetBindState("AimBind")
+    local secondaryState = GetBindState("AimBindSecondary")
+    local shouldAim = ShouldAim(primaryState, secondaryState)
 
-        if isAiming then
-            LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
+    if shouldAim then
+        LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
 
-            if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
-                if MathRandom(1, 100) <= Settings.AimbotHitChance then
-                    local predicted = PredictAimPosition(LegitTarget)
-                    local aimPos = predicted or LegitTarget.Character[Settings.AimPart].Position
-                    local currentCFrame = Camera.CFrame
-                    local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
-                    Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.AimbotSmooth)
-                end
+        if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
+            if MathRandom(1, 100) <= Settings.AimbotHitChance then
+                local predicted = PredictAimPosition(LegitTarget)
+                local aimPos = predicted or LegitTarget.Character[Settings.AimPart].Position
+                local currentCFrame = Camera.CFrame
+                local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
+                Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.AimbotSmooth)
             end
         end
     end
@@ -538,6 +787,13 @@ RenderConnection = RunService.RenderStepped:Connect(function()
         HideAllESP()
         return
     end
+
+    EspAccumulator = EspAccumulator + (dt or 0)
+    local espInterval = GetEspInterval()
+    if EspAccumulator < espInterval then
+        return
+    end
+    EspAccumulator = EspAccumulator - espInterval
 
     for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
@@ -556,7 +812,11 @@ RenderConnection = RunService.RenderStepped:Connect(function()
             continue
         end
 
-        if Settings.TeamCheck and player.Team == LocalPlayer.Team then removeESP(player); continue end
+        local isTeammate = player.Team == LocalPlayer.Team
+        if Settings.TeamCheck and isTeammate then
+            removeESP(player)
+            continue
+        end
         if hum.Health <= 0 then removeESP(player); continue end
 
         local vector, onScreen = Camera:WorldToViewportPoint(hrp.Position)
@@ -572,6 +832,13 @@ RenderConnection = RunService.RenderStepped:Connect(function()
             local boxWidth = boxHeight / 2
             local boxPos = Vector2new(vector.X - boxWidth / 2, vector.Y - boxHeight / 2)
 
+            local colorProfile = enemyColor
+            if hum.Health <= Settings.LowHealthThreshold then
+                colorProfile = lowHealthColor
+            elseif isTeammate then
+                colorProfile = teamColor
+            end
+
             if Settings.BoxESP and objs.Box and objs.BoxOutline then
                 objs.BoxOutline.Size = Vector2new(boxWidth, boxHeight)
                 objs.BoxOutline.Position = boxPos
@@ -579,7 +846,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
 
                 objs.Box.Size = Vector2new(boxWidth, boxHeight)
                 objs.Box.Position = boxPos
-                objs.Box.Color = espColor
+                objs.Box.Color = colorProfile
                 objs.Box.Visible = true
             else
                 if objs.Box then objs.Box.Visible = false end
@@ -606,7 +873,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
             if Settings.NameESP and objs.Name then
                 objs.Name.Text = player.Name
                 objs.Name.Position = Vector2new(vector.X, boxPos.Y - 15)
-                objs.Name.Color = espColor
+                objs.Name.Color = colorProfile
                 objs.Name.Visible = true
 
                 objs.Distance.Text = MathFloor(vector.Z) .. " studs"
@@ -617,7 +884,8 @@ RenderConnection = RunService.RenderStepped:Connect(function()
                 if objs.Distance then objs.Distance.Visible = false end
             end
 
-            if Settings.SkeletonESP then
+            local skeletonEnabled = Settings.SkeletonESP and not (Settings.FPSSafeSkeleton and fps < 55)
+            if skeletonEnabled then
                 local connections = (hum.RigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
 
                 for i, pair in ipairs(connections) do
@@ -633,7 +901,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
                             local line = cache.SkeletonLines[i]
                             line.From = Vector2new(vA.X, vA.Y)
                             line.To = Vector2new(vB.X, vB.Y)
-                            line.Color = espColor
+                            line.Color = colorProfile
                             line.Visible = true
                         elseif cache.SkeletonLines[i] then
                             cache.SkeletonLines[i].Visible = false
