@@ -1,11 +1,11 @@
 --[[
     AimRare Hub
-    Version: 7.1 (Customization & Stability)
+    Version: 7.1 (Rayfield Stability)
     Author: Ben
     Changelog:
     - Added multi-mode aim activation with secondary bind and prioritization controls.
     - Expanded prediction with multiple models, smoothing, and curve tuning plus ESP color profiles.
-    - Swapped Fluent UI loader to a stable mirror to prevent 404 issues and restore UI availability.
+    - Migrated to the Rayfield UI loader for maintained, reliable interface support.
 ]]
 
 -- Services
@@ -16,7 +16,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- Locals & Micro-optimizations
-local VERSION = "7.1 (Customization & Stability)"
+local VERSION = "7.1 (Rayfield Stability)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
@@ -46,6 +46,10 @@ local Settings = {
     FPSSafeSkeleton = false,
     ESPUpdateRate = 60,
     LowHealthThreshold = 30,
+    EnemyESPColor = DEFAULT_ESP_COLOR,
+    TeamESPColor = DEFAULT_TEAM_COLOR,
+    LowHealthESPColor = DEFAULT_LOW_HEALTH_COLOR,
+    FOVCircleColor = DEFAULT_FOV_COLOR,
 
     -- Aimbot Main
     AimbotEnabled = false,
@@ -59,6 +63,8 @@ local Settings = {
     PredictionSmoothing = 0.2,
     AimMode = "Hold",
     TargetPriority = "Closest to crosshair",
+    AimBind = Enum.UserInputType.MouseButton2,
+    AimBindSecondary = Enum.UserInputType.MouseButton3,
 
     -- UI Control
     ShowWatermark = true,
@@ -101,7 +107,7 @@ local LastPrimaryState, LastSecondaryState = false, false
 -- Initialize FOV Circle and Watermark
 pcall(function()
     FOV_Circle_Legit = Drawing.new("Circle")
-    FOV_Circle_Legit.Color = DEFAULT_FOV_COLOR
+    FOV_Circle_Legit.Color = Settings.FOVCircleColor or DEFAULT_FOV_COLOR
     FOV_Circle_Legit.Thickness = 1
     FOV_Circle_Legit.NumSides = 60
     FOV_Circle_Legit.Radius = Settings.AimbotFOV
@@ -122,28 +128,28 @@ end)
 local UPDATE_LOG = {
     "Advanced prediction modes with curve tuning and smoothing",
     "New aim activation modes, secondary bind, and target prioritization",
-    "Fluent UI loader now uses a stable mirror to avoid 404 errors and restore the UI"
+    "Rayfield UI loader added for maintained, reliable interface support"
 }
-
-local function GetOptionValue(flag, fallback)
-    if Fluent and Fluent.Options and Fluent.Options[flag] and Fluent.Options[flag].Value ~= nil then
-        return Fluent.Options[flag].Value
-    end
-    return fallback
-end
 
 local function GetEspInterval()
     local hz = math.clamp(Settings.ESPUpdateRate or 60, 1, 240)
     return 1 / hz
 end
 
-local function GetBindState(flag)
-    local opt = Fluent and Fluent.Options and Fluent.Options[flag]
-    if opt and opt.GetState then
-        return opt:GetState()
-    end
-    if opt and opt.Value ~= nil then
-        return opt.Value
+local function GetBindState(settingKey)
+    local bind = Settings[settingKey]
+    if typeof(bind) == "EnumItem" then
+        if bind.EnumType == Enum.UserInputType then
+            if bind == Enum.UserInputType.MouseButton1 then
+                return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            elseif bind == Enum.UserInputType.MouseButton2 then
+                return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            elseif bind == Enum.UserInputType.MouseButton3 then
+                return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton3)
+            end
+        elseif bind.EnumType == Enum.KeyCode then
+            return UserInputService:IsKeyDown(bind)
+        end
     end
     return false
 end
@@ -401,293 +407,333 @@ local function GetClosestPlayerToMouse(fovLimit)
     return closestPlayer
 end
 
--------------------------------------------------------------------------
--- FLUENT UI
--------------------------------------------------------------------------
-local Fluent
-local FluentWindow
+-- RAYFIELD UI
+--------------------------------------------------------------------------
+local Rayfield
+local RayfieldWindow
+local RayfieldOptions = {}
+
+local function registerOption(flag, object)
+    if flag then
+        RayfieldOptions[flag] = object
+    end
+end
+
+local function sanitizeEnum(value, fallback)
+    if typeof(value) == "EnumItem" then
+        return value
+    elseif type(value) == "string" then
+        return Enum.KeyCode[value] or Enum.UserInputType[value] or fallback
+    end
+    return fallback
+end
+
 local function SetupUI()
     local success, lib = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/rewite12/FluentUIMirror/main/Library.lua"))()
+        return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
     end)
 
     if success and lib then
-        Fluent = lib
-        FluentWindow = Fluent:CreateWindow({
-            Title = "AimRare Hub",
-            SubTitle = "v" .. VERSION,
-            TabWidth = 160,
-            Size = UDim2.fromOffset(580, 460),
+        Rayfield = lib
+        RayfieldWindow = Rayfield:CreateWindow({
+            Name = "AimRare Hub",
+            LoadingTitle = "AimRare Hub",
+            LoadingSubtitle = "v" .. VERSION,
             Theme = "Dark",
-            MinimizeKey = Enum.KeyCode.RightShift
+            DisableRayfieldPrompts = false,
+            ConfigurationSaving = { Enabled = false },
         })
 
-        if Fluent.SetTheme then Fluent:SetTheme("Dark") end
-        if Fluent.SetAccentColor then Fluent:SetAccentColor(ACCENT_COLOR) end
-
-        local legitTab = FluentWindow:AddTab({Title = "Legit Aim", Icon = "target"})
-        local visualsTab = FluentWindow:AddTab({Title = "Visuals", Icon = "eye"})
-        local settingsTab = FluentWindow:AddTab({Title = "Settings", Icon = "settings"})
-
-        FluentWindow:SelectTab(1)
+        local legitTab = RayfieldWindow:CreateTab("Legit Aim", 0)
+        local visualsTab = RayfieldWindow:CreateTab("Visuals", 0)
+        local settingsTab = RayfieldWindow:CreateTab("Settings", 0)
 
         -- Legit Aim
-        legitTab:AddToggle({
-            Title = "Enabled",
-            Default = Settings.AimbotEnabled,
+        registerOption("AimbotEnabled", legitTab:CreateToggle({
+            Name = "Enabled",
+            CurrentValue = Settings.AimbotEnabled,
+            Flag = "AimbotEnabled",
             Callback = function(value)
                 Settings.AimbotEnabled = value
                 if FOV_Circle_Legit then FOV_Circle_Legit.Visible = value end
             end
-        })
+        }))
 
-        legitTab:AddKeybind({
-            Title = "AimBind",
-            Default = Enum.UserInputType.MouseButton2,
-            Mode = "Hold",
-            Flag = "AimBind"
-        })
+        registerOption("AimBind", legitTab:CreateKeybind({
+            Name = "AimBind",
+            CurrentKeybind = Settings.AimBind,
+            HoldToInteract = true,
+            Flag = "AimBind",
+            Callback = function(key)
+                Settings.AimBind = sanitizeEnum(key, Settings.AimBind)
+            end
+        }))
 
-        legitTab:AddSlider({
-            Title = "FOV Radius",
-            Default = Settings.AimbotFOV,
-            Min = 10,
-            Max = 800,
-            Rounding = 0,
+        registerOption("AimbotFOV", legitTab:CreateSlider({
+            Name = "FOV Radius",
+            Range = {10, 800},
+            Increment = 1,
+            CurrentValue = Settings.AimbotFOV,
+            Flag = "AimbotFOV",
             Callback = function(value)
                 Settings.AimbotFOV = value
             end
-        })
+        }))
 
-        legitTab:AddSlider({
-            Title = "Smoothness",
-            Default = Settings.AimbotSmooth,
-            Min = 0.1,
-            Max = 1,
-            Rounding = 2,
+        registerOption("AimbotSmooth", legitTab:CreateSlider({
+            Name = "Smoothness",
+            Range = {0.1, 1},
+            Increment = 0.01,
+            CurrentValue = Settings.AimbotSmooth,
+            Flag = "AimbotSmooth",
             Callback = function(value)
                 Settings.AimbotSmooth = value
             end
-        })
+        }))
 
-        legitTab:AddSlider({
-            Title = "Hit Chance",
-            Default = Settings.AimbotHitChance,
-            Min = 0,
-            Max = 100,
-            Rounding = 0,
+        registerOption("AimbotHitChance", legitTab:CreateSlider({
+            Name = "Hit Chance",
+            Range = {0, 100},
+            Increment = 1,
+            CurrentValue = Settings.AimbotHitChance,
+            Flag = "AimbotHitChance",
             Callback = function(value)
                 Settings.AimbotHitChance = value
             end
-        })
+        }))
 
-        legitTab:AddSlider({
-            Title = "Prediction Speed",
-            Default = Settings.PredictionSpeed,
-            Min = 100,
-            Max = 5000,
-            Rounding = 0,
+        registerOption("PredictionSpeed", legitTab:CreateSlider({
+            Name = "Prediction Speed",
+            Range = {100, 5000},
+            Increment = 10,
+            CurrentValue = Settings.PredictionSpeed,
+            Flag = "PredictionSpeed",
             Callback = function(value)
                 Settings.PredictionSpeed = value
             end
-        })
+        }))
 
-        legitTab:AddDropdown({
-            Title = "Aim Part",
-            Values = {"Head", "UpperTorso", "HumanoidRootPart"},
-            Default = Settings.AimPart,
+        registerOption("AimPart", legitTab:CreateDropdown({
+            Name = "Aim Part",
+            Options = {"Head", "UpperTorso", "HumanoidRootPart"},
+            CurrentOption = Settings.AimPart,
+            Flag = "AimPart",
             Callback = function(value)
-                Settings.AimPart = value
+                Settings.AimPart = type(value) == "table" and value[1] or value
             end
-        })
+        }))
 
-        legitTab:AddColorpicker({
-            Title = "FOV Circle Color",
-            Default = DEFAULT_FOV_COLOR,
+        registerOption("FOVCircleColor", legitTab:CreateColorPicker({
+            Name = "FOV Circle Color",
+            Color = Settings.FOVCircleColor,
             Flag = "FOVCircleColor",
             Callback = function(value)
+                Settings.FOVCircleColor = value
                 if FOV_Circle_Legit then
                     FOV_Circle_Legit.Color = value
                 end
             end
-        })
+        }))
 
-        legitTab:AddKeybind({
-            Title = "Secondary AimBind",
-            Default = Enum.UserInputType.MouseButton3,
-            Mode = "Hold",
-            Flag = "AimBindSecondary"
-        })
-
-        legitTab:AddDropdown({
-            Title = "Aim Mode",
-            Values = {"Hold", "Toggle", "Always-On"},
-            Default = Settings.AimMode,
-            Callback = function(value)
-                Settings.AimMode = value
+        registerOption("AimBindSecondary", legitTab:CreateKeybind({
+            Name = "Secondary AimBind",
+            CurrentKeybind = Settings.AimBindSecondary,
+            HoldToInteract = true,
+            Flag = "AimBindSecondary",
+            Callback = function(key)
+                Settings.AimBindSecondary = sanitizeEnum(key, Settings.AimBindSecondary)
             end
-        })
+        }))
 
-        legitTab:AddDropdown({
-            Title = "Target Priority",
-            Values = {"Closest to crosshair", "Lowest distance", "Lowest health", "Highest threat"},
-            Default = Settings.TargetPriority,
+        registerOption("AimMode", legitTab:CreateDropdown({
+            Name = "Aim Mode",
+            Options = {"Hold", "Toggle", "Always-On"},
+            CurrentOption = Settings.AimMode,
+            Flag = "AimMode",
             Callback = function(value)
-                Settings.TargetPriority = value
+                Settings.AimMode = type(value) == "table" and value[1] or value
             end
-        })
+        }))
 
-        legitTab:AddDropdown({
-            Title = "Prediction Mode",
-            Values = {"Linear", "Advanced", "High-Precision"},
-            Default = Settings.PredictionMode,
+        registerOption("TargetPriority", legitTab:CreateDropdown({
+            Name = "Target Priority",
+            Options = {"Closest to crosshair", "Lowest distance", "Lowest health", "Highest threat"},
+            CurrentOption = Settings.TargetPriority,
+            Flag = "TargetPriority",
             Callback = function(value)
-                Settings.PredictionMode = value
+                Settings.TargetPriority = type(value) == "table" and value[1] or value
             end
-        })
+        }))
 
-        legitTab:AddSlider({
-            Title = "Prediction Curve",
-            Default = Settings.PredictionCurve,
-            Min = 0.25,
-            Max = 2.5,
-            Rounding = 2,
+        registerOption("PredictionMode", legitTab:CreateDropdown({
+            Name = "Prediction Mode",
+            Options = {"Linear", "Advanced", "High-Precision"},
+            CurrentOption = Settings.PredictionMode,
+            Flag = "PredictionMode",
+            Callback = function(value)
+                Settings.PredictionMode = type(value) == "table" and value[1] or value
+            end
+        }))
+
+        registerOption("PredictionCurve", legitTab:CreateSlider({
+            Name = "Prediction Curve",
+            Range = {0.25, 2.5},
+            Increment = 0.01,
+            CurrentValue = Settings.PredictionCurve,
+            Flag = "PredictionCurve",
             Callback = function(value)
                 Settings.PredictionCurve = value
             end
-        })
+        }))
 
-        legitTab:AddSlider({
-            Title = "Prediction Smoothing",
-            Default = Settings.PredictionSmoothing,
-            Min = 0,
-            Max = 1,
-            Rounding = 2,
+        registerOption("PredictionSmoothing", legitTab:CreateSlider({
+            Name = "Prediction Smoothing",
+            Range = {0, 1},
+            Increment = 0.01,
+            CurrentValue = Settings.PredictionSmoothing,
+            Flag = "PredictionSmoothing",
             Callback = function(value)
                 Settings.PredictionSmoothing = value
             end
-        })
+        }))
 
         -- Visuals
-        visualsTab:AddToggle({
-            Title = "Box ESP",
-            Default = Settings.BoxESP,
+        registerOption("BoxESP", visualsTab:CreateToggle({
+            Name = "Box ESP",
+            CurrentValue = Settings.BoxESP,
+            Flag = "BoxESP",
             Callback = function(value)
                 Settings.BoxESP = value
             end
-        })
+        }))
 
-        visualsTab:AddToggle({
-            Title = "Skeleton ESP",
-            Default = Settings.SkeletonESP,
+        registerOption("SkeletonESP", visualsTab:CreateToggle({
+            Name = "Skeleton ESP",
+            CurrentValue = Settings.SkeletonESP,
+            Flag = "SkeletonESP",
             Callback = function(value)
                 Settings.SkeletonESP = value
             end
-        })
+        }))
 
-        visualsTab:AddToggle({
-            Title = "Name ESP",
-            Default = Settings.NameESP,
+        registerOption("NameESP", visualsTab:CreateToggle({
+            Name = "Name ESP",
+            CurrentValue = Settings.NameESP,
+            Flag = "NameESP",
             Callback = function(value)
                 Settings.NameESP = value
             end
-        })
+        }))
 
-        visualsTab:AddToggle({
-            Title = "Health ESP",
-            Default = Settings.HealthESP,
+        registerOption("HealthESP", visualsTab:CreateToggle({
+            Name = "Health ESP",
+            CurrentValue = Settings.HealthESP,
+            Flag = "HealthESP",
             Callback = function(value)
                 Settings.HealthESP = value
             end
-        })
+        }))
 
-        visualsTab:AddToggle({
-            Title = "Team Check",
-            Default = Settings.TeamCheck,
+        registerOption("TeamCheck", visualsTab:CreateToggle({
+            Name = "Team Check",
+            CurrentValue = Settings.TeamCheck,
+            Flag = "TeamCheck",
             Callback = function(value)
                 Settings.TeamCheck = value
             end
-        })
+        }))
 
-        visualsTab:AddColorpicker({
-            Title = "Enemy ESP Color",
-            Default = DEFAULT_ESP_COLOR,
-            Flag = "EnemyESPColor"
-        })
+        registerOption("EnemyESPColor", visualsTab:CreateColorPicker({
+            Name = "Enemy ESP Color",
+            Color = Settings.EnemyESPColor,
+            Flag = "EnemyESPColor",
+            Callback = function(value)
+                Settings.EnemyESPColor = value
+            end
+        }))
 
-        visualsTab:AddColorpicker({
-            Title = "Teammate ESP Color",
-            Default = DEFAULT_TEAM_COLOR,
-            Flag = "TeamESPColor"
-        })
+        registerOption("TeamESPColor", visualsTab:CreateColorPicker({
+            Name = "Teammate ESP Color",
+            Color = Settings.TeamESPColor,
+            Flag = "TeamESPColor",
+            Callback = function(value)
+                Settings.TeamESPColor = value
+            end
+        }))
 
-        visualsTab:AddColorpicker({
-            Title = "Low Health ESP Color",
-            Default = DEFAULT_LOW_HEALTH_COLOR,
-            Flag = "LowHealthESPColor"
-        })
+        registerOption("LowHealthESPColor", visualsTab:CreateColorPicker({
+            Name = "Low Health ESP Color",
+            Color = Settings.LowHealthESPColor,
+            Flag = "LowHealthESPColor",
+            Callback = function(value)
+                Settings.LowHealthESPColor = value
+            end
+        }))
 
-        visualsTab:AddSlider({
-            Title = "Low Health Threshold",
-            Default = Settings.LowHealthThreshold,
-            Min = 5,
-            Max = 75,
-            Rounding = 0,
+        registerOption("LowHealthThreshold", visualsTab:CreateSlider({
+            Name = "Low Health Threshold",
+            Range = {5, 75},
+            Increment = 1,
+            CurrentValue = Settings.LowHealthThreshold,
+            Flag = "LowHealthThreshold",
             Callback = function(value)
                 Settings.LowHealthThreshold = value
             end
-        })
+        }))
 
-        visualsTab:AddSlider({
-            Title = "ESP Update Rate (Hz)",
-            Default = Settings.ESPUpdateRate,
-            Min = 30,
-            Max = 120,
-            Rounding = 0,
+        registerOption("ESPUpdateRate", visualsTab:CreateSlider({
+            Name = "ESP Update Rate (Hz)",
+            Range = {30, 120},
+            Increment = 1,
+            CurrentValue = Settings.ESPUpdateRate,
+            Flag = "ESPUpdateRate",
             Callback = function(value)
                 Settings.ESPUpdateRate = value
             end
-        })
+        }))
 
-        visualsTab:AddToggle({
-            Title = "FPS Safe Skeleton",
-            Default = Settings.FPSSafeSkeleton,
+        registerOption("FPSSafeSkeleton", visualsTab:CreateToggle({
+            Name = "FPS Safe Skeleton",
+            CurrentValue = Settings.FPSSafeSkeleton,
+            Flag = "FPSSafeSkeleton",
             Callback = function(value)
                 Settings.FPSSafeSkeleton = value
             end
-        })
+        }))
 
         -- Settings
-        settingsTab:AddToggle({
-            Title = "Show Watermark",
-            Default = Settings.ShowWatermark,
+        registerOption("ShowWatermark", settingsTab:CreateToggle({
+            Name = "Show Watermark",
+            CurrentValue = Settings.ShowWatermark,
+            Flag = "ShowWatermark",
             Callback = function(value)
                 Settings.ShowWatermark = value
                 if WatermarkText then WatermarkText.Visible = value end
             end
-        })
+        }))
 
-        settingsTab:AddSlider({
-            Title = "Visibility Check Delay",
-            Default = Settings.VisibilityDelay,
-            Min = 0,
-            Max = 1,
-            Rounding = 2,
+        registerOption("VisibilityDelay", settingsTab:CreateSlider({
+            Name = "Visibility Check Delay",
+            Range = {0, 1},
+            Increment = 0.01,
+            CurrentValue = Settings.VisibilityDelay,
+            Flag = "VisibilityDelay",
             Callback = function(value)
                 Settings.VisibilityDelay = value
             end
-        })
+        }))
 
-        settingsTab:AddToggle({
-            Title = "Ignore Accessories in Raycast",
-            Default = Settings.IgnoreAccessories,
+        registerOption("IgnoreAccessories", settingsTab:CreateToggle({
+            Name = "Ignore Accessories in Raycast",
+            CurrentValue = Settings.IgnoreAccessories,
+            Flag = "IgnoreAccessories",
             Callback = function(value)
                 Settings.IgnoreAccessories = value
             end
-        })
+        }))
 
-        settingsTab:AddButton({
-            Title = "Unload Script",
+        registerOption("UnloadButton", settingsTab:CreateButton({
+            Name = "Unload Script",
             Callback = function()
                 if RenderConnection then
                     RenderConnection:Disconnect()
@@ -707,19 +753,19 @@ local function SetupUI()
 
                 if FOV_Circle_Legit then FOV_Circle_Legit:Remove() end
                 if WatermarkText then WatermarkText:Remove() end
-                if Fluent and Fluent.Destroy then Fluent:Destroy() end
+                if Rayfield and Rayfield.Destroy then Rayfield:Destroy() end
             end
-        })
+        }))
 
-        if Fluent.Notify then
-            Fluent:Notify({
+        if Rayfield and Rayfield.Notify then
+            Rayfield:Notify({
                 Title = "AimRare Hub v" .. VERSION,
                 Content = table.concat(UPDATE_LOG, "\n"),
                 Duration = 8
             })
         end
     else
-        warn("AimRare Hub: Failed to load Fluent UI library. UI will be unavailable.")
+        warn("AimRare Hub: Failed to load Rayfield UI library. UI will be unavailable.")
     end
 end
 SetupUI()
@@ -732,10 +778,10 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
         Camera = Workspace.CurrentCamera
     end
     local mouseLoc = UserInputService:GetMouseLocation()
-    local enemyColor = GetOptionValue("EnemyESPColor", DEFAULT_ESP_COLOR)
-    local teamColor = GetOptionValue("TeamESPColor", DEFAULT_TEAM_COLOR)
-    local lowHealthColor = GetOptionValue("LowHealthESPColor", DEFAULT_LOW_HEALTH_COLOR)
-    local fovColor = GetOptionValue("FOVCircleColor", DEFAULT_FOV_COLOR)
+    local enemyColor = Settings.EnemyESPColor or DEFAULT_ESP_COLOR
+    local teamColor = Settings.TeamESPColor or DEFAULT_TEAM_COLOR
+    local lowHealthColor = Settings.LowHealthESPColor or DEFAULT_LOW_HEALTH_COLOR
+    local fovColor = Settings.FOVCircleColor or DEFAULT_FOV_COLOR
     local fps = Workspace:GetRealPhysicsFPS()
 
     -- Draw Legit Circle
