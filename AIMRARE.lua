@@ -1,11 +1,11 @@
 --[[
     AimRare Hub
-    Version: 6.5 (Fluent UI + Prediction)
+    Version: 7.0 (Full Customization)
     Author: Ben
     Changelog:
-    - Migrated the interface to the Fluent UI library (dark theme, red accent).
-    - Added simple velocity prediction so legit aim leads moving targets.
-    - Removed legacy GUI scaffolding and streamlined Drawing/cleanup flows.
+    - Adopted native Fluent keybind and colorpicker controls for full customization.
+    - Added configurable prediction speed for better leading on varied targets.
+    - Simplified input handling and refreshed visuals with dynamic colors.
 ]]
 
 -- Services
@@ -16,8 +16,10 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- Locals & Micro-optimizations
-local VERSION = "6.5"
+local VERSION = "7.0 (Full Customization)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
+local DEFAULT_ESP_COLOR = ACCENT_COLOR
+local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local Vector2new = Vector2.new
@@ -31,11 +33,6 @@ if not Drawing then
     return
 end
 
--- Safe Color Helper
-local function SafeColor(r, g, b)
-    return Color3new(r / 255, g / 255, b / 255)
-end
-
 -- Settings
 local Settings = {
     -- Visuals
@@ -44,7 +41,6 @@ local Settings = {
     NameESP = false,
     HealthESP = false,
     TeamCheck = false,
-    ESPColor = SafeColor(255, 65, 65),
 
     -- Aimbot Main
     AimbotEnabled = false,
@@ -52,12 +48,7 @@ local Settings = {
     AimbotSmooth = 0.2,
     AimbotHitChance = 100,
     AimPart = "Head",
-
-    -- Aimbot Input
-    AimKey = Enum.UserInputType.MouseButton2,
-    AimKeyName = "RMB",
-    AimMode = "Hold",
-    IsAimingToggled = false,
+    PredictionSpeed = 1000,
 
     -- UI Control
     ShowWatermark = true,
@@ -93,7 +84,7 @@ local RayIgnore = {}
 -- Initialize FOV Circle and Watermark
 pcall(function()
     FOV_Circle_Legit = Drawing.new("Circle")
-    FOV_Circle_Legit.Color = Color3new(1, 1, 1)
+    FOV_Circle_Legit.Color = DEFAULT_FOV_COLOR
     FOV_Circle_Legit.Thickness = 1
     FOV_Circle_Legit.NumSides = 60
     FOV_Circle_Legit.Radius = Settings.AimbotFOV
@@ -112,10 +103,17 @@ pcall(function()
 end)
 
 local UPDATE_LOG = {
-    "Rebuilt AimRare UI with the Fluent library (dark theme, red accent)",
-    "Added velocity prediction to keep the aimbot ahead of moving targets",
-    "Cleaned legacy UI logic and streamlined Drawing integrations"
+    "Upgraded to native Fluent keybind and colorpicker controls for customization",
+    "Added adjustable prediction speed for improved target leading",
+    "Simplified input handling and refreshed dynamic visuals"
 }
+
+local function GetOptionValue(flag, fallback)
+    if Fluent and Fluent.Options and Fluent.Options[flag] and Fluent.Options[flag].Value ~= nil then
+        return Fluent.Options[flag].Value
+    end
+    return fallback
+end
 
 -------------------------------------------------------------------------
 -- DRAWING HELPERS
@@ -134,7 +132,7 @@ end
 local function createLine()
     local line = Drawing.new("Line")
     line.Thickness = 1.5
-    line.Color = Settings.ESPColor
+    line.Color = DEFAULT_ESP_COLOR
     line.Transparency = 1
     line.Visible = false
     return line
@@ -246,7 +244,8 @@ local function PredictAimPosition(target)
     end
 
     local distance = (aimPart.Position - Camera.CFrame.Position).Magnitude
-    local predictionTime = math.clamp(distance / 700, 0, 1) -- distance-scaled leading
+    local speedDivisor = Settings.PredictionSpeed > 0 and Settings.PredictionSpeed or 700
+    local predictionTime = math.clamp(distance / speedDivisor, 0, 1) -- distance-scaled leading
 
     return aimPart.Position + (velocity * predictionTime)
 end
@@ -319,6 +318,13 @@ local function SetupUI()
             end
         })
 
+        legitTab:AddKeybind({
+            Title = "AimBind",
+            Default = Enum.UserInputType.MouseButton2,
+            Mode = "Hold",
+            Flag = "AimBind"
+        })
+
         legitTab:AddSlider({
             Title = "FOV Radius",
             Default = Settings.AimbotFOV,
@@ -352,12 +358,34 @@ local function SetupUI()
             end
         })
 
+        legitTab:AddSlider({
+            Title = "Prediction Speed",
+            Default = Settings.PredictionSpeed,
+            Min = 100,
+            Max = 5000,
+            Rounding = 0,
+            Callback = function(value)
+                Settings.PredictionSpeed = value
+            end
+        })
+
         legitTab:AddDropdown({
             Title = "Aim Part",
             Values = {"Head", "UpperTorso", "HumanoidRootPart"},
             Default = Settings.AimPart,
             Callback = function(value)
                 Settings.AimPart = value
+            end
+        })
+
+        legitTab:AddColorpicker({
+            Title = "FOV Circle Color",
+            Default = DEFAULT_FOV_COLOR,
+            Flag = "FOVCircleColor",
+            Callback = function(value)
+                if FOV_Circle_Legit then
+                    FOV_Circle_Legit.Color = value
+                end
             end
         })
 
@@ -400,6 +428,12 @@ local function SetupUI()
             Callback = function(value)
                 Settings.TeamCheck = value
             end
+        })
+
+        visualsTab:AddColorpicker({
+            Title = "Enemy ESP Color",
+            Default = DEFAULT_ESP_COLOR,
+            Flag = "EnemyESPColor"
         })
 
         -- Settings
@@ -451,21 +485,6 @@ end
 SetupUI()
 
 -------------------------------------------------------------------------
--- INPUT LISTENER
--------------------------------------------------------------------------
-UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe then return end
-
-    local isCorrectKey = false
-    if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Settings.AimKey then isCorrectKey = true end
-    if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2) and input.UserInputType == Settings.AimKey then isCorrectKey = true end
-
-    if isCorrectKey and Settings.AimMode == "Toggle" then
-        Settings.IsAimingToggled = not Settings.IsAimingToggled
-    end
-end)
-
--------------------------------------------------------------------------
 -- RENDER LOOP (OPTIMIZED)
 -------------------------------------------------------------------------
 RenderConnection = RunService.RenderStepped:Connect(function()
@@ -473,11 +492,14 @@ RenderConnection = RunService.RenderStepped:Connect(function()
         Camera = Workspace.CurrentCamera
     end
     local mouseLoc = UserInputService:GetMouseLocation()
+    local espColor = GetOptionValue("EnemyESPColor", DEFAULT_ESP_COLOR)
+    local fovColor = GetOptionValue("FOVCircleColor", DEFAULT_FOV_COLOR)
 
     -- Draw Legit Circle
     if FOV_Circle_Legit then
         FOV_Circle_Legit.Position = mouseLoc
         FOV_Circle_Legit.Radius = Settings.AimbotFOV
+        FOV_Circle_Legit.Color = fovColor
         FOV_Circle_Legit.Visible = Settings.AimbotEnabled
     end
 
@@ -492,16 +514,8 @@ RenderConnection = RunService.RenderStepped:Connect(function()
 
     -- AIMBOT LOGIC
     if Settings.AimbotEnabled then
-        local isAiming = false
-        if Settings.AimMode == "Hold" then
-            if Settings.AimKey.EnumType == Enum.UserInputType then
-                isAiming = UserInputService:IsMouseButtonPressed(Settings.AimKey)
-            elseif Settings.AimKey.EnumType == Enum.KeyCode then
-                isAiming = UserInputService:IsKeyDown(Settings.AimKey)
-            end
-        else
-            isAiming = Settings.IsAimingToggled
-        end
+        local aimBind = Fluent and Fluent.Options and Fluent.Options.AimBind
+        local isAiming = aimBind and aimBind.GetState and aimBind:GetState() or false
 
         if isAiming then
             LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
@@ -565,7 +579,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
 
                 objs.Box.Size = Vector2new(boxWidth, boxHeight)
                 objs.Box.Position = boxPos
-                objs.Box.Color = Settings.ESPColor
+                objs.Box.Color = espColor
                 objs.Box.Visible = true
             else
                 if objs.Box then objs.Box.Visible = false end
@@ -592,7 +606,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
             if Settings.NameESP and objs.Name then
                 objs.Name.Text = player.Name
                 objs.Name.Position = Vector2new(vector.X, boxPos.Y - 15)
-                objs.Name.Color = Settings.ESPColor
+                objs.Name.Color = espColor
                 objs.Name.Visible = true
 
                 objs.Distance.Text = MathFloor(vector.Z) .. " studs"
@@ -619,7 +633,7 @@ RenderConnection = RunService.RenderStepped:Connect(function()
                             local line = cache.SkeletonLines[i]
                             line.From = Vector2new(vA.X, vA.Y)
                             line.To = Vector2new(vB.X, vB.Y)
-                            line.Color = Settings.ESPColor
+                            line.Color = espColor
                             line.Visible = true
                         elseif cache.SkeletonLines[i] then
                             cache.SkeletonLines[i].Visible = false
