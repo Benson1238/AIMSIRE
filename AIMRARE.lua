@@ -1,3 +1,4 @@
+--[[
     AimRare Hub
     Version: 7.3 (Wall Check UI Toggle)
     Author: Ben
