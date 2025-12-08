@@ -1,6 +1,6 @@
 --[[
     AimRare Hub
-    Version: 7.1 (Rayfield Stability)
+    Version: 7.1 (Rayfield UI Fix)
     Author: Ben
     Changelog:
     - Added multi-mode aim activation with secondary bind and prioritization controls.
@@ -16,7 +16,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- Locals & Micro-optimizations
-local VERSION = "7.1 (Rayfield Stability)"
+local VERSION = "7.1 (Rayfield UI Fix)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
@@ -128,7 +128,8 @@ end)
 local UPDATE_LOG = {
     "Advanced prediction modes with curve tuning and smoothing",
     "New aim activation modes, secondary bind, and target prioritization",
-    "Rayfield UI loader added for maintained, reliable interface support"
+    "Rayfield UI loader added for maintained, reliable interface support",
+    "Fixed Rayfield controls to ensure all tabs render fully",
 }
 
 local function GetEspInterval()
@@ -444,9 +445,9 @@ local function SetupUI()
             ConfigurationSaving = { Enabled = false },
         })
 
-        local legitTab = RayfieldWindow:CreateTab("Legit Aim", 0)
-        local visualsTab = RayfieldWindow:CreateTab("Visuals", 0)
-        local settingsTab = RayfieldWindow:CreateTab("Settings", 0)
+        local legitTab = RayfieldWindow:CreateTab("Legit Aim")
+        local visualsTab = RayfieldWindow:CreateTab("Visuals")
+        local settingsTab = RayfieldWindow:CreateTab("Settings")
 
         -- Legit Aim
         registerOption("AimbotEnabled", legitTab:CreateToggle({
@@ -516,7 +517,7 @@ local function SetupUI()
         registerOption("AimPart", legitTab:CreateDropdown({
             Name = "Aim Part",
             Options = {"Head", "UpperTorso", "HumanoidRootPart"},
-            CurrentOption = Settings.AimPart,
+            CurrentOption = {Settings.AimPart},
             Flag = "AimPart",
             Callback = function(value)
                 Settings.AimPart = type(value) == "table" and value[1] or value
@@ -548,7 +549,7 @@ local function SetupUI()
         registerOption("AimMode", legitTab:CreateDropdown({
             Name = "Aim Mode",
             Options = {"Hold", "Toggle", "Always-On"},
-            CurrentOption = Settings.AimMode,
+            CurrentOption = {Settings.AimMode},
             Flag = "AimMode",
             Callback = function(value)
                 Settings.AimMode = type(value) == "table" and value[1] or value
@@ -558,7 +559,7 @@ local function SetupUI()
         registerOption("TargetPriority", legitTab:CreateDropdown({
             Name = "Target Priority",
             Options = {"Closest to crosshair", "Lowest distance", "Lowest health", "Highest threat"},
-            CurrentOption = Settings.TargetPriority,
+            CurrentOption = {Settings.TargetPriority},
             Flag = "TargetPriority",
             Callback = function(value)
                 Settings.TargetPriority = type(value) == "table" and value[1] or value
@@ -568,7 +569,7 @@ local function SetupUI()
         registerOption("PredictionMode", legitTab:CreateDropdown({
             Name = "Prediction Mode",
             Options = {"Linear", "Advanced", "High-Precision"},
-            CurrentOption = Settings.PredictionMode,
+            CurrentOption = {Settings.PredictionMode},
             Flag = "PredictionMode",
             Callback = function(value)
                 Settings.PredictionMode = type(value) == "table" and value[1] or value
