@@ -16,12 +16,13 @@ local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "7.3 (Wall Check UI Toggle)"
+local VERSION = "8.0 (Triggerbot & Optimizations)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
 local DEFAULT_TEAM_COLOR = Color3.fromRGB(65, 170, 255)
 local DEFAULT_LOW_HEALTH_COLOR = Color3.fromRGB(255, 200, 65)
+local OCCLUDED_COLOR = Color3.fromRGB(160, 160, 160)
 local Camera = Workspace.CurrentCamera
 local LocalPlayer = Players.LocalPlayer
 local Vector2new = Vector2.new
@@ -61,10 +62,13 @@ local Settings = {
     PredictionMode = "Linear",
     PredictionCurve = 1,
     PredictionSmoothing = 0.2,
+    AimSmoothingCurve = "Linear", -- Linear, Exponential, EaseInOut
     AimMode = "Hold",
     TargetPriority = "Closest to crosshair",
     AimBind = Enum.UserInputType.MouseButton2,
     AimBindSecondary = Enum.UserInputType.MouseButton3,
+    AntiJitterRadius = 6,
+    UseEasing = true,
 
     -- UI Control
     ShowWatermark = true,
@@ -74,6 +78,16 @@ local Settings = {
     AliveCheck = true,
     VisibilityDelay = 0,
     IgnoreAccessories = false,
+
+    -- Triggerbot
+    TriggerbotEnabled = false,
+    TriggerbotDelay = 50,
+    TriggerbotFireRate = 120,
+    TriggerbotHoldBind = Enum.UserInputType.MouseButton1,
+    TriggerbotRequiresAimbot = false,
+    TriggerbotTeamCheck = true,
+    TriggerbotWallCheck = true,
+    TriggerbotMaxDistance = 500,
 }
 
 local MOUSE_INPUT_ALIASES = {
@@ -112,15 +126,26 @@ local FOV_Circle_Legit = nil
 local LegitTarget = nil
 local WatermarkText = nil
 local RenderConnection = nil -- Handle for the loop
-local RayParams = RaycastParams.new() -- Create once, reuse later
-RayParams.FilterType = Enum.RaycastFilterType.Exclude
-RayParams.IgnoreWater = true
+local RayParamsDefault = RaycastParams.new()
+RayParamsDefault.FilterType = Enum.RaycastFilterType.Exclude
+RayParamsDefault.IgnoreWater = true
+local RayParamsIgnoreAccessories = RaycastParams.new()
+RayParamsIgnoreAccessories.FilterType = Enum.RaycastFilterType.Exclude
+RayParamsIgnoreAccessories.IgnoreWater = true
+local RayParamsIgnoreTeam = RaycastParams.new()
+RayParamsIgnoreTeam.FilterType = Enum.RaycastFilterType.Exclude
+RayParamsIgnoreTeam.IgnoreWater = true
 local RayIgnore = {}
 local LastVisibilityResult = {}
 local LastVelocityCache = {}
+local AccessoryCache = {}
+local ViewportCache = {}
+local ViewportFrame = 0
 local EspAccumulator = 0
 local AimToggleState = false
 local LastPrimaryState, LastSecondaryState = false, false
+local LastTriggerTime = 0
+local LastShotTime = 0
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
@@ -309,8 +334,66 @@ end
 -- TARGETING HELPERS
 -------------------------------------------------------------------------
 -- HELPER: Wall Check Raycast (Optimized)
-local function IsVisible(target)
-    if not target or not target.Character or not target.Character:FindFirstChild(Settings.AimPart) then return false end
+-- Raycast parameter provider to reduce allocations while supporting variations
+local function GetRayParams(ignoreAccessories, ignoreTeam)
+    local params
+    if ignoreTeam then
+        params = RayParamsIgnoreTeam
+    elseif ignoreAccessories then
+        params = RayParamsIgnoreAccessories
+    else
+        params = RayParamsDefault
+    end
+    table.clear(RayIgnore)
+    RayIgnore[1] = LocalPlayer.Character or Workspace.CurrentCamera
+    params.FilterDescendantsInstances = RayIgnore
+    return params, RayIgnore
+end
+
+-- Cache accessory lists per character to avoid repeated scans
+local function GetAccessoryList(character)
+    local cached = AccessoryCache[character]
+    if cached and cached.__instance == character then
+        return cached
+    end
+
+    local list = { __instance = character }
+    local index = 1
+    for _, accessory in ipairs(character:GetChildren()) do
+        if accessory:IsA("Accessory") and accessory:FindFirstChild("Handle") then
+            list[index] = accessory
+            index += 1
+        end
+    end
+    AccessoryCache[character] = list
+    return list
+end
+
+-- Retrieves screen position with per-frame cache to limit WorldToViewport calls
+local function GetViewportPosition(part)
+    local frame = ViewportFrame
+    local cached = ViewportCache[part]
+    if cached and cached.Frame == frame then
+        return cached.Data[1], cached.Data[2]
+    end
+    local pos, visible = Camera:WorldToViewportPoint(part.Position)
+    ViewportCache[part] = { Frame = frame, Data = { pos, visible } }
+    return pos, visible
+end
+
+-- Performs wall/occlusion check respecting accessory filtering and teams
+-- @param target Player to test visibility against
+-- @param aimPart Base part used as target
+-- @param forceEnabled optional boolean override to force wall checking when true/false
+local function PerformWallCheck(target, aimPart, forceEnabled)
+    local shouldCheck = forceEnabled
+    if shouldCheck == nil then
+        shouldCheck = Settings.WallCheck
+    end
+
+    if not shouldCheck then
+        return true
+    end
 
     local now = tick()
     local last = LastVisibilityResult[target]
@@ -318,27 +401,24 @@ local function IsVisible(target)
         return last.Visible
     end
 
-    local origin = Camera.CFrame.Position
-    local targetPos = target.Character[Settings.AimPart].Position
-    local direction = targetPos - origin
+    local character = target.Character
+    if not character or not aimPart then return false end
 
-    table.clear(RayIgnore)
-    RayIgnore[1] = LocalPlayer.Character or Workspace.CurrentCamera
-    RayIgnore[2] = target.Character
+    local params, ignoreList = GetRayParams(Settings.IgnoreAccessories, Settings.TeamCheck and target.Team == LocalPlayer.Team)
+    ignoreList[2] = character
 
-    if Settings.IgnoreAccessories and target.Character then
-        local index = 3
-        for _, accessory in ipairs(target.Character:GetChildren()) do
-            if accessory:IsA("Accessory") and accessory:FindFirstChild("Handle") then
-                RayIgnore[index] = accessory
-                index += 1
-            end
+    if Settings.IgnoreAccessories then
+        local accessories = GetAccessoryList(character)
+        for i = 1, #accessories do
+            ignoreList[#ignoreList + 1] = accessories[i]
         end
     end
 
-    RayParams.FilterDescendantsInstances = RayIgnore
+    params.FilterDescendantsInstances = ignoreList
 
-    local result = Workspace:Raycast(origin, direction, RayParams)
+    local origin = Camera.CFrame.Position
+    local direction = aimPart.Position - origin
+    local result = Workspace:Raycast(origin, direction, params)
     local visible = result == nil
 
     LastVisibilityResult[target] = { Time = now, Visible = visible }
@@ -346,7 +426,7 @@ local function IsVisible(target)
 end
 
 -- Predict target movement for smoother aim leading
-local function PredictAimPosition(target)
+local function PredictMovement(target)
     local character = target and target.Character
     if not character then return nil end
 
@@ -387,8 +467,8 @@ local function PredictAimPosition(target)
     return aimPart.Position + (velocity * baseTime * curve)
 end
 
--- Updated Target Selector with FOV Argument
-local function GetClosestPlayerToMouse(fovLimit)
+-- Updated Target Selector with FOV Argument and cached viewport
+local function GetTarget(fovLimit)
     local closestPlayer = nil
     local bestScore = math.huge
     local mousePos = UserInputService:GetMouseLocation()
@@ -400,9 +480,9 @@ local function GetClosestPlayerToMouse(fovLimit)
 
             if Settings.TeamCheck and player.Team == LocalPlayer.Team then continue end
             if Settings.AliveCheck and hum and hum.Health <= 0 then continue end
-            if Settings.WallCheck and not IsVisible(player) then continue end
+            if Settings.WallCheck and not PerformWallCheck(player, player.Character[Settings.AimPart]) then continue end
 
-            local pos, onScreen = Camera:WorldToViewportPoint(player.Character[Settings.AimPart].Position)
+            local pos, onScreen = GetViewportPosition(player.Character[Settings.AimPart])
 
             if onScreen then
                 local cursorDistance = (Vector2new(pos.X, pos.Y) - mousePos).Magnitude
@@ -526,6 +606,36 @@ local function SetupUI()
             end
         }))
 
+        registerOption("AimSmoothingCurve", legitTab:CreateDropdown({
+            Name = "Smoothing Curve",
+            Options = {"Linear", "Exponential", "EaseInOut"},
+            CurrentOption = {Settings.AimSmoothingCurve},
+            Flag = "AimSmoothingCurve",
+            Callback = function(value)
+                Settings.AimSmoothingCurve = type(value) == "table" and value[1] or value
+            end
+        }))
+
+        registerOption("UseEasing", legitTab:CreateToggle({
+            Name = "Ease Out Aim",
+            CurrentValue = Settings.UseEasing,
+            Flag = "UseEasing",
+            Callback = function(value)
+                Settings.UseEasing = value
+            end
+        }))
+
+        registerOption("AntiJitterRadius", legitTab:CreateSlider({
+            Name = "Anti-Jitter Radius",
+            Range = {0, 25},
+            Increment = 1,
+            CurrentValue = Settings.AntiJitterRadius,
+            Flag = "AntiJitterRadius",
+            Callback = function(value)
+                Settings.AntiJitterRadius = value
+            end
+        }))
+
         registerOption("AimbotHitChance", legitTab:CreateSlider({
             Name = "Hit Chance",
             Range = {0, 100},
@@ -629,6 +739,87 @@ local function SetupUI()
             Flag = "PredictionSmoothing",
             Callback = function(value)
                 Settings.PredictionSmoothing = value
+            end
+        }))
+
+        legitTab:CreateSection("Triggerbot")
+
+        registerOption("TriggerbotEnabled", legitTab:CreateToggle({
+            Name = "Triggerbot Enabled",
+            CurrentValue = Settings.TriggerbotEnabled,
+            Flag = "TriggerbotEnabled",
+            Callback = function(value)
+                Settings.TriggerbotEnabled = value
+            end
+        }))
+
+        registerOption("TriggerbotHoldBind", legitTab:CreateKeybind({
+            Name = "Triggerbot Bind",
+            CurrentKeybind = keybindToText(Settings.TriggerbotHoldBind, "MouseButton1"),
+            HoldToInteract = true,
+            Flag = "TriggerbotHoldBind",
+            Callback = function(key)
+                Settings.TriggerbotHoldBind = sanitizeEnum(key, Settings.TriggerbotHoldBind)
+            end
+        }))
+
+        registerOption("TriggerbotDelay", legitTab:CreateSlider({
+            Name = "Shot Delay (ms)",
+            Range = {0, 250},
+            Increment = 5,
+            CurrentValue = Settings.TriggerbotDelay,
+            Flag = "TriggerbotDelay",
+            Callback = function(value)
+                Settings.TriggerbotDelay = value
+            end
+        }))
+
+        registerOption("TriggerbotFireRate", legitTab:CreateSlider({
+            Name = "Fire Rate Limit (ms)",
+            Range = {50, 500},
+            Increment = 5,
+            CurrentValue = Settings.TriggerbotFireRate,
+            Flag = "TriggerbotFireRate",
+            Callback = function(value)
+                Settings.TriggerbotFireRate = value
+            end
+        }))
+
+        registerOption("TriggerbotRequiresAimbot", legitTab:CreateToggle({
+            Name = "Only Shoot When Aimbot Active",
+            CurrentValue = Settings.TriggerbotRequiresAimbot,
+            Flag = "TriggerbotRequiresAimbot",
+            Callback = function(value)
+                Settings.TriggerbotRequiresAimbot = value
+            end
+        }))
+
+        registerOption("TriggerbotTeamCheck", legitTab:CreateToggle({
+            Name = "Triggerbot Team Check",
+            CurrentValue = Settings.TriggerbotTeamCheck,
+            Flag = "TriggerbotTeamCheck",
+            Callback = function(value)
+                Settings.TriggerbotTeamCheck = value
+            end
+        }))
+
+        registerOption("TriggerbotWallCheck", legitTab:CreateToggle({
+            Name = "Triggerbot Wall Check",
+            CurrentValue = Settings.TriggerbotWallCheck,
+            Flag = "TriggerbotWallCheck",
+            Callback = function(value)
+                Settings.TriggerbotWallCheck = value
+            end
+        }))
+
+        registerOption("TriggerbotMaxDistance", legitTab:CreateSlider({
+            Name = "Triggerbot Max Distance",
+            Range = {50, 1000},
+            Increment = 10,
+            CurrentValue = Settings.TriggerbotMaxDistance,
+            Flag = "TriggerbotMaxDistance",
+            Callback = function(value)
+                Settings.TriggerbotMaxDistance = value
             end
         }))
 
@@ -815,28 +1006,47 @@ end
 SetupUI()
 
 -------------------------------------------------------------------------
--- RENDER LOOP (OPTIMIZED)
--------------------------------------------------------------------------
-RenderConnection = RunService.RenderStepped:Connect(function(dt)
-    if Workspace.CurrentCamera ~= Camera then
-        Camera = Workspace.CurrentCamera
+-- Simple easing helpers for aim smoothing
+local function easeOutQuad(t)
+    return 1 - (1 - t) * (1 - t)
+end
+
+local function resolveSmoothingAlpha(dt)
+    local base = math.clamp(Settings.AimbotSmooth, 0.01, 1)
+    local scaled = 1 - math.exp(-base * (dt * 60)) -- frame-rate independent blend
+
+    if Settings.AimSmoothingCurve == "Exponential" then
+        scaled = scaled * scaled
+    elseif Settings.AimSmoothingCurve == "EaseInOut" then
+        scaled = easeOutQuad(scaled)
     end
+
+    return math.clamp(scaled, 0, 1)
+end
+
+-- Anti-jitter guard for near-center targets
+local function IsNearCenter(position2d)
+    local viewportCenter = Camera.ViewportSize / 2
+    return (Vector2new(position2d.X, position2d.Y) - Vector2new(viewportCenter.X, viewportCenter.Y)).Magnitude <= Settings.AntiJitterRadius
+end
+
+-- UI refresh separated for clarity
+local LastFovColor, LastEnemyColor, LastTeamColor, LastLowHealthColor
+local function UpdateUI(dt)
     local mouseLoc = UserInputService:GetMouseLocation()
-    local enemyColor = Settings.EnemyESPColor or DEFAULT_ESP_COLOR
-    local teamColor = Settings.TeamESPColor or DEFAULT_TEAM_COLOR
-    local lowHealthColor = Settings.LowHealthESPColor or DEFAULT_LOW_HEALTH_COLOR
     local fovColor = Settings.FOVCircleColor or DEFAULT_FOV_COLOR
     local fps = Workspace:GetRealPhysicsFPS()
 
-    -- Draw Legit Circle
     if FOV_Circle_Legit then
         FOV_Circle_Legit.Position = mouseLoc
         FOV_Circle_Legit.Radius = Settings.AimbotFOV
-        FOV_Circle_Legit.Color = fovColor
+        if fovColor ~= LastFovColor then
+            FOV_Circle_Legit.Color = fovColor
+            LastFovColor = fovColor
+        end
         FOV_Circle_Legit.Visible = Settings.AimbotEnabled
     end
 
-    -- Update Watermark FPS
     if WatermarkText then
         WatermarkText.Visible = Settings.ShowWatermark
         if Settings.ShowWatermark then
@@ -852,30 +1062,164 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
         end
     end
 
-    -- AIMBOT LOGIC
-    local primaryState = GetBindState("AimBind")
-    local secondaryState = GetBindState("AimBindSecondary")
+    return mouseLoc
+end
+
+-- Aimbot handler (frame)
+local function UpdateAimbot(dt, primaryState, secondaryState)
     local shouldAim = ShouldAim(primaryState, secondaryState)
-
-    if shouldAim then
-        LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
-
-        if LegitTarget and Settings.WallCheck and not IsVisible(LegitTarget) then
-            LegitTarget = nil
-        end
-
-        if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
-            if MathRandom(1, 100) <= Settings.AimbotHitChance then
-                local predicted = PredictAimPosition(LegitTarget)
-                local aimPos = predicted or LegitTarget.Character[Settings.AimPart].Position
-                local currentCFrame = Camera.CFrame
-                local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
-                Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.AimbotSmooth)
-            end
-        end
+    if not shouldAim then
+        LegitTarget = nil
+        return shouldAim
     end
 
-    -- ESP LOOP
+    LegitTarget = GetTarget(Settings.AimbotFOV)
+
+    if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
+        if MathRandom(1, 100) <= Settings.AimbotHitChance then
+            local aimPart
+            local aimChoices = { Settings.AimPart, "UpperTorso", "HumanoidRootPart" }
+            for _, partName in ipairs(aimChoices) do
+                local candidate = LegitTarget.Character:FindFirstChild(partName)
+                if candidate then
+                    if Settings.WallCheck and not PerformWallCheck(LegitTarget, candidate) then
+                        continue
+                    end
+                    aimPart = candidate
+                    break
+                end
+            end
+
+            if not aimPart then return shouldAim end
+
+            local pos, onScreen = GetViewportPosition(aimPart)
+            if Settings.AntiJitterRadius > 0 and onScreen and IsNearCenter(pos) then
+                return shouldAim
+            end
+
+            local predicted = PredictMovement(LegitTarget)
+            local aimPos = predicted or aimPart.Position
+            local currentCFrame = Camera.CFrame
+            local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
+            local alpha = resolveSmoothingAlpha(dt)
+
+            if Settings.UseEasing then
+                alpha = easeOutQuad(alpha)
+            end
+
+            Camera.CFrame = currentCFrame:Lerp(targetCFrame, alpha)
+        end
+    end
+    return shouldAim
+end
+
+-- Triggerbot implementation using camera->mouse raycast
+local function UpdateTriggerbot(dt, mouseLoc, aimingActive)
+    if not Settings.TriggerbotEnabled then return end
+    if Settings.TriggerbotRequiresAimbot and not aimingActive then return end
+    if Settings.TriggerbotHoldBind and not GetBindState("TriggerbotHoldBind") then return end
+
+    local now = tick()
+    local delaySec = Settings.TriggerbotDelay / 1000
+    local rateSec = Settings.TriggerbotFireRate / 1000
+    if now - LastShotTime < rateSec or now - LastTriggerTime < delaySec then
+        return
+    end
+
+    local ray = Camera:ViewportPointToRay(mouseLoc.X, mouseLoc.Y)
+    local params, ignoreList = GetRayParams(Settings.IgnoreAccessories, false)
+    ignoreList[2] = LocalPlayer.Character
+    params.FilterDescendantsInstances = ignoreList
+
+    local result = Workspace:Raycast(ray.Origin, ray.Direction * Settings.TriggerbotMaxDistance, params)
+    if not result or not result.Instance then return end
+
+    local model = result.Instance:FindFirstAncestorWhichIsA("Model")
+    if not model then return end
+    local player = Players:GetPlayerFromCharacter(model)
+    if not player or player == LocalPlayer then return end
+
+    if Settings.TriggerbotTeamCheck and player.Team == LocalPlayer.Team then return end
+
+    local hitPartName = result.Instance.Name
+    local important = hitPartName == "Head" or hitPartName == "HumanoidRootPart" or hitPartName == "UpperTorso"
+    if not important then return end
+
+    if Settings.TriggerbotWallCheck and not PerformWallCheck(player, result.Instance, true) then
+        return
+    end
+
+    local distance = (result.Position - Camera.CFrame.Position).Magnitude
+    if distance > Settings.TriggerbotMaxDistance then return end
+
+    -- Apply the shot after respecting delay and rate limits
+    LastTriggerTime = now
+    task.delay(delaySec, function()
+        if tick() - LastShotTime < rateSec then return end
+        LastShotTime = tick()
+        pcall(function()
+            mouse1press()
+            task.wait(0.02)
+            mouse1release()
+        end)
+    end)
+end
+
+-- ESP drawing helpers
+local function DrawBoxESP(objs, boxPos, boxWidth, boxHeight, color)
+    if objs.BoxOutline and objs.Box then
+        objs.BoxOutline.Size = Vector2new(boxWidth, boxHeight)
+        objs.BoxOutline.Position = boxPos
+        objs.BoxOutline.Visible = true
+
+        objs.Box.Size = Vector2new(boxWidth, boxHeight)
+        objs.Box.Position = boxPos
+        objs.Box.Color = color
+        objs.Box.Visible = true
+    end
+end
+
+local function DrawHealthESP(objs, boxPos, boxHeight, healthPercent)
+    if not (objs.HealthBar and objs.HealthOutline) then return end
+    local barHeight = boxHeight * healthPercent
+
+    objs.HealthOutline.From = Vector2new(boxPos.X - 5, boxPos.Y + boxHeight)
+    objs.HealthOutline.To = Vector2new(boxPos.X - 5, boxPos.Y)
+    objs.HealthOutline.Visible = true
+
+    objs.HealthBar.From = Vector2new(boxPos.X - 5, boxPos.Y + boxHeight)
+    objs.HealthBar.To = Vector2new(boxPos.X - 5, boxPos.Y + boxHeight - barHeight)
+    objs.HealthBar.Color = Color3new(1 - healthPercent, healthPercent, 0)
+    objs.HealthBar.Visible = true
+end
+
+local function DrawSkeleton(char, hum, cache, color)
+    local connections = (hum.RigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
+    for i, pair in ipairs(connections) do
+        local pA = char:FindFirstChild(pair[1])
+        local pB = char:FindFirstChild(pair[2])
+
+        if pA and pB then
+            local vA, visA = GetViewportPosition(pA)
+            local vB, visB = GetViewportPosition(pB)
+
+            if visA and visB then
+                if not cache.SkeletonLines[i] then cache.SkeletonLines[i] = createLine() end
+                local line = cache.SkeletonLines[i]
+                line.From = Vector2new(vA.X, vA.Y)
+                line.To = Vector2new(vB.X, vB.Y)
+                line.Color = color
+                line.Visible = true
+            elseif cache.SkeletonLines[i] then
+                cache.SkeletonLines[i].Visible = false
+            end
+        elseif cache.SkeletonLines[i] then
+            cache.SkeletonLines[i].Visible = false
+        end
+    end
+end
+
+local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
     local espActive = IsESPEnabled()
     if not espActive then
         HideAllESP()
@@ -913,7 +1257,7 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
         end
         if hum.Health <= 0 then removeESP(player); continue end
 
-        local vector, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+        local vector, onScreen = GetViewportPosition(hrp)
 
         if not ESP_Cache[player] then
             ESP_Cache[player] = { Objects = createBoxStructure(), SkeletonLines = {} }
@@ -921,8 +1265,17 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
         local cache = ESP_Cache[player]
         local objs = cache.Objects
 
-        if onScreen then
-            local boxHeight = (Camera.ViewportSize.Y / vector.Z) * 7
+        if onScreen and vector.Z > 0 then
+            local distance = vector.Z
+            if distance > 600 then
+                -- Skip expensive ESP for far targets
+                if objs.Box then objs.Box.Visible = false end
+                if objs.BoxOutline then objs.BoxOutline.Visible = false end
+                for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+                continue
+            end
+
+            local boxHeight = (Camera.ViewportSize.Y / distance) * 7
             local boxWidth = boxHeight / 2
             local boxPos = Vector2new(vector.X - boxWidth / 2, vector.Y - boxHeight / 2)
 
@@ -933,32 +1286,15 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
                 colorProfile = teamColor
             end
 
-            if Settings.BoxESP and objs.Box and objs.BoxOutline then
-                objs.BoxOutline.Size = Vector2new(boxWidth, boxHeight)
-                objs.BoxOutline.Position = boxPos
-                objs.BoxOutline.Visible = true
-
-                objs.Box.Size = Vector2new(boxWidth, boxHeight)
-                objs.Box.Position = boxPos
-                objs.Box.Color = colorProfile
-                objs.Box.Visible = true
+            if Settings.BoxESP then
+                DrawBoxESP(objs, boxPos, boxWidth, boxHeight, colorProfile)
             else
                 if objs.Box then objs.Box.Visible = false end
                 if objs.BoxOutline then objs.BoxOutline.Visible = false end
             end
 
-            if Settings.HealthESP and objs.HealthBar then
-                local healthPercent = hum.Health / hum.MaxHealth
-                local barHeight = boxHeight * healthPercent
-
-                objs.HealthOutline.From = Vector2new(boxPos.X - 5, boxPos.Y + boxHeight)
-                objs.HealthOutline.To = Vector2new(boxPos.X - 5, boxPos.Y)
-                objs.HealthOutline.Visible = true
-
-                objs.HealthBar.From = Vector2new(boxPos.X - 5, boxPos.Y + boxHeight)
-                objs.HealthBar.To = Vector2new(boxPos.X - 5, boxPos.Y + boxHeight - barHeight)
-                objs.HealthBar.Color = Color3new(1 - healthPercent, healthPercent, 0)
-                objs.HealthBar.Visible = true
+            if Settings.HealthESP then
+                DrawHealthESP(objs, boxPos, boxHeight, hum.Health / hum.MaxHealth)
             else
                 if objs.HealthBar then objs.HealthBar.Visible = false end
                 if objs.HealthOutline then objs.HealthOutline.Visible = false end
@@ -978,36 +1314,19 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
                 if objs.Distance then objs.Distance.Visible = false end
             end
 
-            local skeletonEnabled = Settings.SkeletonESP and not (Settings.FPSSafeSkeleton and fps < 55)
+            local skeletonEnabled = Settings.SkeletonESP and not (Settings.FPSSafeSkeleton and Workspace:GetRealPhysicsFPS() < 55)
             if skeletonEnabled then
-                local connections = (hum.RigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
-
-                for i, pair in ipairs(connections) do
-                    local pA = char:FindFirstChild(pair[1])
-                    local pB = char:FindFirstChild(pair[2])
-
-                    if pA and pB then
-                        local vA, visA = Camera:WorldToViewportPoint(pA.Position)
-                        local vB, visB = Camera:WorldToViewportPoint(pB.Position)
-
-                        if visA and visB then
-                            if not cache.SkeletonLines[i] then cache.SkeletonLines[i] = createLine() end
-                            local line = cache.SkeletonLines[i]
-                            line.From = Vector2new(vA.X, vA.Y)
-                            line.To = Vector2new(vB.X, vB.Y)
-                            line.Color = colorProfile
-                            line.Visible = true
-                        elseif cache.SkeletonLines[i] then
-                            cache.SkeletonLines[i].Visible = false
-                        end
-                    elseif cache.SkeletonLines[i] then
-                        cache.SkeletonLines[i].Visible = false
-                    end
-                end
+                DrawSkeleton(char, hum, cache, colorProfile)
             else
                 for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
             end
 
+            -- Occlusion ESP tinting
+            if Settings.WallCheck and Settings.BoxESP then
+                if not PerformWallCheck(player, hrp) then
+                    objs.Box.Color = OCCLUDED_COLOR
+                end
+            end
         else
             if objs.Box then objs.Box.Visible = false end
             if objs.BoxOutline then objs.BoxOutline.Visible = false end
@@ -1018,4 +1337,31 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
             for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
         end
     end
+end
+
+-- Main render connection
+RenderConnection = RunService.RenderStepped:Connect(function(dt)
+    if Workspace.CurrentCamera ~= Camera then
+        Camera = Workspace.CurrentCamera
+    end
+
+    ViewportFrame += 1
+    table.clear(ViewportCache)
+
+    local enemyColor = Settings.EnemyESPColor or DEFAULT_ESP_COLOR
+    local teamColor = Settings.TeamESPColor or DEFAULT_TEAM_COLOR
+    local lowHealthColor = Settings.LowHealthESPColor or DEFAULT_LOW_HEALTH_COLOR
+
+    if enemyColor ~= LastEnemyColor then LastEnemyColor = enemyColor end
+    if teamColor ~= LastTeamColor then LastTeamColor = teamColor end
+    if lowHealthColor ~= LastLowHealthColor then LastLowHealthColor = lowHealthColor end
+
+    local mouseLoc = UpdateUI(dt)
+
+    local primaryState = GetBindState("AimBind")
+    local secondaryState = GetBindState("AimBindSecondary")
+    local aimingActive = UpdateAimbot(dt, primaryState, secondaryState)
+
+    UpdateTriggerbot(dt, mouseLoc, aimingActive)
+    UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
 end)
