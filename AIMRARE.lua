@@ -998,6 +998,11 @@ local function SetupUI()
                 Content = table.concat(UPDATE_LOG, "\n"),
                 Duration = 8
             })
+            Rayfield:Notify({
+                Title = "Triggerbot Status",
+                Content = "Triggerbot is currently under cunrstruction It will not work good or will completly not work",
+                Duration = 10
+            })
         end
     else
         warn("AimRare Hub: Failed to load Rayfield UI library. UI will be unavailable.")
