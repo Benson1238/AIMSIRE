@@ -1,9 +1,4 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/AIMRARE.lua b/AIMRARE.lua
-index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b3606490bd56 100644
---- a/AIMRARE.lua
-+++ b/AIMRARE.lua
-@@ -1,148 +1,174 @@
+
  --[[
      AimRare Hub
      Version: 7.3 (Wall Check UI Toggle)
@@ -182,7 +177,7 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
  local UPDATE_LOG = {
      "Added a visible Wall Check toggle to enable/disable occlusion checks from the UI",
      "Enforced wall checks inside the aimbot loop to skip obstructed targets in real time",
-@@ -287,144 +313,199 @@ local function IsESPEnabled()
+@@ -287,314 +313,390 @@ local function IsESPEnabled()
      return Settings.BoxESP or Settings.SkeletonESP or Settings.NameESP or Settings.HealthESP
  end
  
@@ -404,7 +399,80 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
                          closestPlayer = player
                          bestScore = score
                      end
-@@ -504,50 +585,80 @@ local function SetupUI()
+                 end
+             end
+         end
+     end
+     return closestPlayer
+ end
+ 
+ -- RAYFIELD UI
+ --------------------------------------------------------------------------
+ local Rayfield
+ local RayfieldWindow
+ local RayfieldOptions = {}
+ 
+ local function registerOption(flag, object)
+     if flag then
+         RayfieldOptions[flag] = object
+     end
+ end
+ 
+-local function keybindToText(value, fallback)
+-    if typeof(value) == "EnumItem" then
+-        return value.Name
+-    elseif type(value) == "string" then
+-        return value
+-    end
+-    return fallback or "None"
+-end
+-
+ local function SetupUI()
+     local success, lib = pcall(function()
+         return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+     end)
+ 
+     if success and lib then
+         Rayfield = lib
+ 
+         local preferredTheme = "Dark"
+         local resolvedTheme = (Rayfield.Theme and Rayfield.Theme[preferredTheme]) and preferredTheme or "Default"
+         if resolvedTheme ~= preferredTheme then
+             warn("AimRare Hub: Requested Rayfield theme '" .. preferredTheme .. "' missing, falling back to '" .. resolvedTheme .. "'.")
+         end
+ 
+         RayfieldWindow = Rayfield:CreateWindow({
+             Name = "AimRare Hub",
+             LoadingTitle = "AimRare Hub",
+             LoadingSubtitle = "v" .. VERSION,
+             Theme = resolvedTheme,
+             DisableRayfieldPrompts = false,
+             ConfigurationSaving = { Enabled = false },
+         })
+ 
+         local legitTab = RayfieldWindow:CreateTab("Legit Aim")
+         local visualsTab = RayfieldWindow:CreateTab("Visuals")
+         local settingsTab = RayfieldWindow:CreateTab("Settings")
+ 
+         -- Legit Aim
+         registerOption("AimbotEnabled", legitTab:CreateToggle({
+             Name = "Enabled",
+             CurrentValue = Settings.AimbotEnabled,
+             Flag = "AimbotEnabled",
+             Callback = function(value)
+                 Settings.AimbotEnabled = value
+                 if FOV_Circle_Legit then FOV_Circle_Legit.Visible = value end
+             end
+         }))
+ 
+         registerOption("AimBind", legitTab:CreateKeybind({
+             Name = "AimBind",
+-            CurrentKeybind = keybindToText(Settings.AimBind, "MouseButton2"),
++            CurrentKeybind = sanitizeEnum(Settings.AimBind, Enum.UserInputType.MouseButton2),
+             HoldToInteract = true,
+             Flag = "AimBind",
+             Callback = function(key)
+                 Settings.AimBind = sanitizeEnum(key, Settings.AimBind)
              end
          }))
  
@@ -485,7 +553,55 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
          registerOption("AimPart", legitTab:CreateDropdown({
              Name = "Aim Part",
              Options = {"Head", "UpperTorso", "HumanoidRootPart"},
-@@ -610,50 +721,140 @@ local function SetupUI()
+             CurrentOption = {Settings.AimPart},
+             Flag = "AimPart",
+             Callback = function(value)
+                 Settings.AimPart = type(value) == "table" and value[1] or value
+             end
+         }))
+ 
+         registerOption("FOVCircleColor", legitTab:CreateColorPicker({
+             Name = "FOV Circle Color",
+             Color = Settings.FOVCircleColor,
+             Flag = "FOVCircleColor",
+             Callback = function(value)
+                 Settings.FOVCircleColor = value
+                 if FOV_Circle_Legit then
+                     FOV_Circle_Legit.Color = value
+                 end
+             end
+         }))
+ 
+         registerOption("AimBindSecondary", legitTab:CreateKeybind({
+             Name = "Secondary AimBind",
+-            CurrentKeybind = keybindToText(Settings.AimBindSecondary, "MouseButton3"),
++            CurrentKeybind = sanitizeEnum(Settings.AimBindSecondary, Enum.UserInputType.MouseButton3),
+             HoldToInteract = true,
+             Flag = "AimBindSecondary",
+             Callback = function(key)
+                 Settings.AimBindSecondary = sanitizeEnum(key, Settings.AimBindSecondary)
+             end
+         }))
+ 
+         registerOption("AimMode", legitTab:CreateDropdown({
+             Name = "Aim Mode",
+             Options = {"Hold", "Toggle", "Always-On"},
+             CurrentOption = {Settings.AimMode},
+             Flag = "AimMode",
+             Callback = function(value)
+                 Settings.AimMode = type(value) == "table" and value[1] or value
+             end
+         }))
+ 
+         registerOption("TargetPriority", legitTab:CreateDropdown({
+             Name = "Target Priority",
+             Options = {"Closest to crosshair", "Lowest distance", "Lowest health", "Highest threat"},
+             CurrentOption = {Settings.TargetPriority},
+             Flag = "TargetPriority",
+             Callback = function(value)
+                 Settings.TargetPriority = type(value) == "table" and value[1] or value
+             end
+@@ -610,50 +712,140 @@ local function SetupUI()
              end
          }))
  
@@ -524,7 +640,7 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
 +
 +        registerOption("TriggerbotHoldBind", legitTab:CreateKeybind({
 +            Name = "Triggerbot Bind",
-+            CurrentKeybind = keybindToText(Settings.TriggerbotHoldBind, "MouseButton1"),
++            CurrentKeybind = sanitizeEnum(Settings.TriggerbotHoldBind, Enum.UserInputType.MouseButton1),
 +            HoldToInteract = true,
 +            Flag = "TriggerbotHoldBind",
 +            Callback = function(key)
@@ -626,7 +742,7 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
              Flag = "NameESP",
              Callback = function(value)
                  Settings.NameESP = value
-@@ -793,229 +994,384 @@ local function SetupUI()
+@@ -793,229 +985,384 @@ local function SetupUI()
                          for _, line in pairs(cache.SkeletonLines) do if line.Remove then line:Remove() end end
                      end
                      ESP_Cache[player] = nil
@@ -732,9 +848,7 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
 +        LegitTarget = nil
 +        return shouldAim
 +    end
- 
--    if shouldAim then
--        LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
++
 +    LegitTarget = GetTarget(Settings.AimbotFOV)
 +
 +    if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
@@ -751,11 +865,11 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
 +                    break
 +                end
 +            end
- 
--        if LegitTarget and Settings.WallCheck and not IsVisible(LegitTarget) then
--            LegitTarget = nil
-+            if not aimPart then return shouldAim end
 +
++            if not aimPart then return shouldAim end
+ 
+-    if shouldAim then
+-        LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
 +            local pos, onScreen = GetViewportPosition(aimPart)
 +            if Settings.AntiJitterRadius > 0 and onScreen and IsNearCenter(pos) then
 +                return shouldAim
@@ -766,7 +880,9 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
 +            local currentCFrame = Camera.CFrame
 +            local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
 +            local alpha = resolveSmoothingAlpha(dt)
-+
+ 
+-        if LegitTarget and Settings.WallCheck and not IsVisible(LegitTarget) then
+-            LegitTarget = nil
 +            if Settings.UseEasing then
 +                alpha = easeOutQuad(alpha)
 +            end
@@ -804,14 +920,7 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
 +    if not player or player == LocalPlayer then return end
 +
 +    if Settings.TriggerbotTeamCheck and player.Team == LocalPlayer.Team then return end
- 
--        if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
--            if MathRandom(1, 100) <= Settings.AimbotHitChance then
--                local predicted = PredictAimPosition(LegitTarget)
--                local aimPos = predicted or LegitTarget.Character[Settings.AimPart].Position
--                local currentCFrame = Camera.CFrame
--                local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
--                Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.AimbotSmooth)
++
 +    local hitPartName = result.Instance.Name
 +    local important = hitPartName == "Head" or hitPartName == "HumanoidRootPart" or hitPartName == "UpperTorso"
 +    if not important then return end
@@ -863,7 +972,14 @@ index 09274fae5da1a8ab95380e04c551db5d29510e88..6e1d9116eab35bc7902f10164182b360
 +    objs.HealthBar.Color = Color3new(1 - healthPercent, healthPercent, 0)
 +    objs.HealthBar.Visible = true
 +end
-+
+ 
+-        if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
+-            if MathRandom(1, 100) <= Settings.AimbotHitChance then
+-                local predicted = PredictAimPosition(LegitTarget)
+-                local aimPos = predicted or LegitTarget.Character[Settings.AimPart].Position
+-                local currentCFrame = Camera.CFrame
+-                local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
+-                Camera.CFrame = currentCFrame:Lerp(targetCFrame, Settings.AimbotSmooth)
 +local function DrawSkeleton(char, hum, cache, color)
 +    local connections = (hum.RigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
 +    for i, pair in ipairs(connections) do
