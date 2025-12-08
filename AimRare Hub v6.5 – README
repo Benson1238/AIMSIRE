@@ -1,0 +1,193 @@
+AimRare Hub v6.5 is a client-side utility script for Roblox, providing a customizable legit-style aimbot, ESP visual tools, and a modern Fluent UI interface.
+This version introduces improved performance, prediction-based aiming, and a redesigned Fluent UI.
+
+Note: This script requires an executor that supports the Drawing API.
+
+Key Features
+🎯 Legit Aimbot
+
+FOV-based target selection
+
+Smooth camera interpolation (legit-style aim assist)
+
+Hit chance simulation
+
+Velocity-based aim prediction
+
+Multiple aim parts (Head, UpperTorso, HumanoidRootPart)
+
+Hold or toggle aiming modes
+
+Optional wall-check using raycasting
+
+Team and alive checks
+
+👁 ESP System
+
+Full player visualization system including:
+
+Box ESP
+
+Skeleton ESP (R15 + R6 support)
+
+Name & Distance ESP
+
+Health Bar ESP
+
+Team Check for filtering teammates
+
+ESP elements are cached for performance and updated every frame.
+
+🖥 Fluent UI Integration
+
+A modern Fluent-based interface with:
+
+Three main tabs:
+
+Legit Aim
+
+Visuals
+
+Settings
+
+Real-time configurable parameters
+
+Watermark toggle
+
+"Unload Script" button for full cleanup
+
+Accent color and dark-theme UI
+
+The UI library is loaded remotely from GitHub.
+
+⚡ Performance & Optimization
+
+The script includes numerous optimizations:
+
+Micro-optimized math and Drawing calls
+
+Reused RaycastParams
+
+ESP caching system
+
+Conditional rendering
+
+Single RenderStepped loop
+
+Predictive aiming for smoother behavior
+
+Changelog (v6.5)
+
+Migrated interface to the Fluent UI library
+
+Implemented velocity prediction for more accurate target leading
+
+Cleaned and restructured ESP + Drawing systems
+
+Replaced older GUI logic with modern UI handling
+
+Improved performance and reduced redundant calculations
+
+Requirements
+
+To use this script, you need:
+
+A Roblox executor that supports:
+
+Drawing.new() API
+
+HttpGet() (for UI library loading)
+
+A device capable of handling continuous rendering loops
+
+How It Works
+Aimbot Workflow
+
+Detects closest player within the FOV circle
+
+Applies team/wall/alive checks
+
+Predicts future target position
+
+Smoothly interpolates camera CFrame towards predicted point
+
+Applies randomization based on HitChance
+
+ESP Workflow
+
+Creates a Drawing object set for each player
+
+Calculates on-screen positions using the camera
+
+Draws boxes, skeletons, names, and health bars
+
+Hides or removes ESP if a player leaves or is not visible
+
+Configuration
+
+All default settings are located in the Settings table:
+
+Settings = {
+    AimbotEnabled = false,
+    AimbotFOV = 100,
+    AimbotSmooth = 0.2,
+    AimbotHitChance = 100,
+    AimPart = "Head",
+    BoxESP = false,
+    SkeletonESP = false,
+    NameESP = false,
+    HealthESP = false,
+    TeamCheck = false,
+    WallCheck = false,
+    AliveCheck = true,
+    ShowWatermark = true,
+}
+
+UI Tabs Overview
+Legit Aim Tab
+
+Toggle aimbot
+
+Adjust FOV, smoothness, hit chance
+
+Choose aim part
+
+Visuals Tab
+
+Toggle box, skeleton, health, and name ESP
+
+Enable team filtering
+
+Settings Tab
+
+Toggle watermark display
+
+Unload the script entirely
+
+Error Handling
+
+If the Drawing API is missing, the script stops with a warning
+
+Missing UI library loads are caught via pcall
+
+ESP objects automatically remove themselves when a player leaves
+
+Unloading the Script
+
+The built-in "Unload Script" button:
+
+Disconnects all connections
+
+Removes all Drawing objects
+
+Clears ESP cache
+
+Destroys the Fluent UI window
+
+This ensures a clean reset without restarting Roblox.
+
+Disclaimer
+
+This script modifies client-side rendering and camera behavior.
+It does not interact with or modify Roblox server logic.
+Compatibility and performance depend on the user's executor and hardware.
