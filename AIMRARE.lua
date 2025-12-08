@@ -417,8 +417,8 @@ local function GetClosestPlayerToMouse(fovLimit)
                     elseif priority == "Highest threat" then
                         local root = player.Character:FindFirstChild("HumanoidRootPart")
                         if root then
-                            local dirToLocal = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart"))
-                                and (LocalPlayer.Character.HumanoidRootPart.Position - root.Position).Unit or Vector3.new(0,0,0)
+                            local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                            local dirToLocal = localRoot and (localRoot.Position - root.Position).Unit or Vector3.new(0, 0, 0)
                             local look = root.CFrame.LookVector
                             score = 1 - math.clamp(look:Dot(dirToLocal), -1, 1)
                         end
