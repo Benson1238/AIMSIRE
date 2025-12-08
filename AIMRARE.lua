@@ -1,11 +1,11 @@
 --[[
     AimRare Hub
-    Version: 7.1 (Rayfield UI Fix)
+    Version: 7.2 (Wall Check + Keybind Fixes)
     Author: Ben
     Changelog:
-    - Added multi-mode aim activation with secondary bind and prioritization controls.
-    - Expanded prediction with multiple models, smoothing, and curve tuning plus ESP color profiles.
-    - Migrated to the Rayfield UI loader for maintained, reliable interface support.
+    - Enforced wall checks inside the aimbot loop so targets behind cover are skipped in real time.
+    - Normalized keybind detection so Rayfield string binds (e.g. "MB2") work with the aimbot toggles.
+    - Added a Rayfield theme fallback and UI fixes to keep all tabs rendering when assets are missing.
 ]]
 
 -- Services
@@ -16,7 +16,7 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- Locals & Micro-optimizations
-local VERSION = "7.1 (Rayfield UI Fix)"
+local VERSION = "7.2 (Wall Check + Keybind Fixes)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
@@ -76,6 +76,24 @@ local Settings = {
     IgnoreAccessories = false,
 }
 
+local MOUSE_INPUT_ALIASES = {
+    MouseButton1 = Enum.UserInputType.MouseButton1,
+    MouseButton2 = Enum.UserInputType.MouseButton2,
+    MouseButton3 = Enum.UserInputType.MouseButton3,
+    MB1 = Enum.UserInputType.MouseButton1,
+    MB2 = Enum.UserInputType.MouseButton2,
+    MB3 = Enum.UserInputType.MouseButton3,
+}
+
+local function sanitizeEnum(value, fallback)
+    if typeof(value) == "EnumItem" then
+        return value
+    elseif type(value) == "string" then
+        return MOUSE_INPUT_ALIASES[value] or Enum.KeyCode[value] or Enum.UserInputType[value] or fallback
+    end
+    return fallback
+end
+
 -- Constants for Skeleton ESP (Moved out of loop for performance)
 local R15_Connections = {
     {"Head","UpperTorso"}, {"UpperTorso","LowerTorso"}, {"LowerTorso","LeftUpperLeg"},
@@ -126,10 +144,11 @@ pcall(function()
 end)
 
 local UPDATE_LOG = {
+    "Enforced wall checks inside the aimbot loop to skip obstructed targets in real time",
+    "Normalized keybind detection so Rayfield string binds and enums both work",
+    "Rayfield theme fallback keeps the UI stable when preferred assets are missing",
     "Advanced prediction modes with curve tuning and smoothing",
     "New aim activation modes, secondary bind, and target prioritization",
-    "Rayfield UI loader added for maintained, reliable interface support",
-    "Fixed Rayfield controls to ensure all tabs render fully",
 }
 
 local function GetEspInterval()
@@ -139,6 +158,13 @@ end
 
 local function GetBindState(settingKey)
     local bind = Settings[settingKey]
+    if type(bind) == "string" then
+        local normalized = sanitizeEnum(bind)
+        if normalized then
+            Settings[settingKey] = normalized
+            bind = normalized
+        end
+    end
     if typeof(bind) == "EnumItem" then
         if bind.EnumType == Enum.UserInputType then
             if bind == Enum.UserInputType.MouseButton1 then
@@ -418,24 +444,6 @@ local function registerOption(flag, object)
     if flag then
         RayfieldOptions[flag] = object
     end
-end
-
-local MOUSE_INPUT_ALIASES = {
-    MouseButton1 = Enum.UserInputType.MouseButton1,
-    MouseButton2 = Enum.UserInputType.MouseButton2,
-    MouseButton3 = Enum.UserInputType.MouseButton3,
-    MB1 = Enum.UserInputType.MouseButton1,
-    MB2 = Enum.UserInputType.MouseButton2,
-    MB3 = Enum.UserInputType.MouseButton3,
-}
-
-local function sanitizeEnum(value, fallback)
-    if typeof(value) == "EnumItem" then
-        return value
-    elseif type(value) == "string" then
-        return MOUSE_INPUT_ALIASES[value] or Enum.KeyCode[value] or Enum.UserInputType[value] or fallback
-    end
-    return fallback
 end
 
 local function keybindToText(value, fallback)
@@ -841,6 +849,10 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
 
     if shouldAim then
         LegitTarget = GetClosestPlayerToMouse(Settings.AimbotFOV)
+
+        if LegitTarget and Settings.WallCheck and not IsVisible(LegitTarget) then
+            LegitTarget = nil
+        end
 
         if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
             if MathRandom(1, 100) <= Settings.AimbotHitChance then
