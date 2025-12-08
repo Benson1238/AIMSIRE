@@ -1,147 +1,197 @@
-
-AimRare Hub v7.0 – Full Customization Edition
+AimRare Hub v7.1 – Customization & Stability Update
 
 Author: Ben
-Version: 7.0
+Version: 7.1
 Requires: Executor with Drawing API and HttpGet support
 
 Overview
 
-AimRare Hub v7.0 is a fully customizable client-side enhancement script for Roblox, featuring a configurable legit-style aimbot, advanced ESP visualization tools, and an expanded Fluent UI interface.
-This version focuses on customization, improved prediction handling, and simplified input logic.
+AimRare Hub v7.1 introduces major improvements in customization, prediction accuracy, performance stability, and aiming logic.
+This version expands user control over aimbot behavior, target selection, ESP performance, and color profiles. The update is designed to enhance stability on lower-end devices while offering more advanced configuration options for experienced users.
 
 Key Features
-Legit Aimbot
+1. Aimbot System
 
-Configurable FOV-based targeting
+Fully configurable legit-style aim assist
 
-Smooth camera interpolation
+Multi-mode activation: Hold, Toggle, Always-On
 
-Optional hit chance simulation
+Primary and Secondary keybind support
 
-Adjustable prediction speed for improved movement leading
+Customizable FOV radius, smoothing, and hit chance
 
-Team check, alive check, and wall check options
+Three prediction models:
 
-Selectable aim parts (Head, UpperTorso, HumanoidRootPart)
+Linear
 
-Fluent-based keybind control for aiming
+Advanced
 
-ESP System
+High-Precision
 
-Supports several on-screen overlays for player visualization:
+Velocity caching with smoothing for improved accuracy
+
+Adjustable prediction curve and prediction speed
+
+Target prioritization:
+
+Closest to crosshair
+
+Lowest distance
+
+Lowest health
+
+Highest threat
+
+Optional wall check and alive check
+
+Optional accessory-ignored raycasting
+
+2. ESP System
 
 Box ESP
 
-Skeleton ESP (R6 and R15)
+Skeleton ESP (R6 & R15)
 
-Name ESP
+Name and distance display
 
-Health Bar ESP
+Health bar ESP
 
-Distance display
+Team check support
 
-Customizable ESP color through Fluent's colorpicker
+Configurable ESP update rate (30–120 Hz)
 
-Automatic caching and cleanup per player
+FPS-safe skeleton mode (auto-disables skeletons under low FPS)
 
-Fluent UI Integration
+Multi-color profiles:
 
-Version 7.0 replaces previous UI handling with full native Fluent controls:
+Enemy color
+
+Teammate color
+
+Low-health color
+
+Adjustable low-health threshold
+
+3. Fluent UI Integration
+
+AimRare Hub v7.1 uses native Fluent UI components for enhanced interactivity.
+
+Includes:
 
 Toggles, sliders, dropdowns
 
-Keybind configuration
+Keybind controls (primary + secondary bind)
 
-Colorpickers for FOV and ESP colors
+Colorpickers for ESP and FOV circle
 
-Organized tab layout (Legit Aim, Visuals, Settings)
+Organized tab structure:
 
-Optional watermark display
+Legit Aim
 
-Built-in unload button for safe cleanup
+Visuals
 
-Changelog (v7.0)
+Settings
 
-Integrated Fluent's native keybind and colorpicker systems
+Watermark control
 
-Added configurable prediction speed for dynamic target leading
+Full unload function removing all Drawing objects and UI
 
-Simplified input handling using Fluent's state-based keybind API
+Changelog (v7.1)
+Aimbot
 
-Updated visuals to support dynamic color updates from UI
+Added multi-mode aim activation (Hold, Toggle, Always-On)
 
-General cleanup and internal restructuring for improved readability and performance
+Introduced secondary keybind for faster activation
 
-Requirements
+Implemented advanced target prioritization system
 
-To run this script successfully, the executor must support:
+Added three prediction models with curve tuning and smoothing
 
-Drawing API (Drawing.new)
+Velocity caching for more realistic motion leading
 
-HttpGet for loading the Fluent UI library
+ESP
 
-Stable RenderStepped execution
+ESP rendering is now throttled using a configurable update rate
 
-Performance will depend on hardware and the number of active Drawing objects.
+Added FPS-safe skeleton mode
 
-How the System Works
-Aimbot Processing
+Introduced color profiles (enemy, teammate, low health)
 
-Selects the closest viable target within the configured FOV radius.
+Added low health threshold settings
 
-Applies alive, team, and wall checks when enabled.
+Improved visibility caching with optional accessory-ignored raycasts
 
-Calculates predicted aim position using distance-based time and user-defined prediction speed.
+General
 
-Interpolates the camera toward the predicted target location using a smoothing factor.
+Stability improvements across all modules
 
-Applies configured hit chance before executing aim logic.
+Full rewrite of major update loops for consistent timing
 
-ESP Rendering
+Enhanced watermark information (FPS, target, prediction speed)
 
-Maintains a cache of Drawing objects per player.
+Performance Improvements
 
-Projects character positions onto the screen each frame.
+ESP updates now use a fixed time-step loop based on user-configured Hz
 
-Draws ESP elements such as boxes, names, skeletons, health bars, and distances if enabled.
+Reduced high-frequency raycasting with cached visibility results
 
-Handles per-player cleanup when characters or players are removed.
+Skeleton ESP disabled automatically under low FPS conditions when enabled
 
-Configuration
+Optimized velocity prediction and smoothing logic
 
-All core adjustable values are stored in the Settings table, for example:
+Minimized unnecessary Drawing updates
 
-AimbotEnabled = false
-AimbotFOV = 100
-AimbotSmooth = 0.2
-AimbotHitChance = 100
-PredictionSpeed = 1000
-AimPart = "Head"
-BoxESP = false
-SkeletonESP = false
-NameESP = false
-HealthESP = false
-TeamCheck = false
-WallCheck = false
-ShowWatermark = true
+Configuration Overview
+Aimbot Settings
+AimbotEnabled
+AimbotFOV
+AimbotSmooth
+AimbotHitChance
+AimPart
+PredictionMode
+PredictionSpeed
+PredictionCurve
+PredictionSmoothing
+AimMode
+TargetPriority
+WallCheck
+AliveCheck
 
+ESP Settings
+BoxESP
+SkeletonESP
+HealthESP
+NameESP
+TeamCheck
+FPSSafeSkeleton
+ESPUpdateRate
+EnemyESPColor
+TeamESPColor
+LowHealthESPColor
+LowHealthThreshold
 
-Most settings can also be modified directly through the Fluent UI.
+General Settings
+ShowWatermark
+VisibilityDelay
+IgnoreAccessories
 
-Script Unloading
+Unload Function
 
-The script includes an unload function accessible in the Settings tab.
-Executing it will:
+The script provides a complete unload routine that:
 
-Disconnect the RenderStepped loop
+Disconnects all render loops
 
-Remove all Drawing objects
+Removes all Drawing objects
 
-Clear ESP caches
+Clears ESP caches and prediction caches
 
-Remove the FOV circle and watermark
+Removes the FOV circle and watermark
 
-Destroy the Fluent UI window
+Destroys the Fluent UI window
 
-This ensures clean termination without requiring a client restart.
+This ensures the script leaves no residual objects or connections.
+
+Disclaimer
+
+AimRare Hub operates entirely on the client side and does not modify server-side systems.
+Performance and feature availability depend on the executor used and its Drawing API support.
