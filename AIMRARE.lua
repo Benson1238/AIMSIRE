@@ -420,13 +420,31 @@ local function registerOption(flag, object)
     end
 end
 
+local MOUSE_INPUT_ALIASES = {
+    MouseButton1 = Enum.UserInputType.MouseButton1,
+    MouseButton2 = Enum.UserInputType.MouseButton2,
+    MouseButton3 = Enum.UserInputType.MouseButton3,
+    MB1 = Enum.UserInputType.MouseButton1,
+    MB2 = Enum.UserInputType.MouseButton2,
+    MB3 = Enum.UserInputType.MouseButton3,
+}
+
 local function sanitizeEnum(value, fallback)
     if typeof(value) == "EnumItem" then
         return value
     elseif type(value) == "string" then
-        return Enum.KeyCode[value] or Enum.UserInputType[value] or fallback
+        return MOUSE_INPUT_ALIASES[value] or Enum.KeyCode[value] or Enum.UserInputType[value] or fallback
     end
     return fallback
+end
+
+local function keybindToText(value, fallback)
+    if typeof(value) == "EnumItem" then
+        return value.Name
+    elseif type(value) == "string" then
+        return value
+    end
+    return fallback or "None"
 end
 
 local function SetupUI()
@@ -436,11 +454,18 @@ local function SetupUI()
 
     if success and lib then
         Rayfield = lib
+
+        local preferredTheme = "Dark"
+        local resolvedTheme = (Rayfield.Theme and Rayfield.Theme[preferredTheme]) and preferredTheme or "Default"
+        if resolvedTheme ~= preferredTheme then
+            warn("AimRare Hub: Requested Rayfield theme '" .. preferredTheme .. "' missing, falling back to '" .. resolvedTheme .. "'.")
+        end
+
         RayfieldWindow = Rayfield:CreateWindow({
             Name = "AimRare Hub",
             LoadingTitle = "AimRare Hub",
             LoadingSubtitle = "v" .. VERSION,
-            Theme = "Dark",
+            Theme = resolvedTheme,
             DisableRayfieldPrompts = false,
             ConfigurationSaving = { Enabled = false },
         })
@@ -462,7 +487,7 @@ local function SetupUI()
 
         registerOption("AimBind", legitTab:CreateKeybind({
             Name = "AimBind",
-            CurrentKeybind = Settings.AimBind,
+            CurrentKeybind = keybindToText(Settings.AimBind, "MouseButton2"),
             HoldToInteract = true,
             Flag = "AimBind",
             Callback = function(key)
@@ -538,7 +563,7 @@ local function SetupUI()
 
         registerOption("AimBindSecondary", legitTab:CreateKeybind({
             Name = "Secondary AimBind",
-            CurrentKeybind = Settings.AimBindSecondary,
+            CurrentKeybind = keybindToText(Settings.AimBindSecondary, "MouseButton3"),
             HoldToInteract = true,
             Flag = "AimBindSecondary",
             Callback = function(key)
