@@ -1,0 +1,147 @@
+
+AimRare Hub v7.0 – Full Customization Edition
+
+Author: Ben
+Version: 7.0
+Requires: Executor with Drawing API and HttpGet support
+
+Overview
+
+AimRare Hub v7.0 is a fully customizable client-side enhancement script for Roblox, featuring a configurable legit-style aimbot, advanced ESP visualization tools, and an expanded Fluent UI interface.
+This version focuses on customization, improved prediction handling, and simplified input logic.
+
+Key Features
+Legit Aimbot
+
+Configurable FOV-based targeting
+
+Smooth camera interpolation
+
+Optional hit chance simulation
+
+Adjustable prediction speed for improved movement leading
+
+Team check, alive check, and wall check options
+
+Selectable aim parts (Head, UpperTorso, HumanoidRootPart)
+
+Fluent-based keybind control for aiming
+
+ESP System
+
+Supports several on-screen overlays for player visualization:
+
+Box ESP
+
+Skeleton ESP (R6 and R15)
+
+Name ESP
+
+Health Bar ESP
+
+Distance display
+
+Customizable ESP color through Fluent's colorpicker
+
+Automatic caching and cleanup per player
+
+Fluent UI Integration
+
+Version 7.0 replaces previous UI handling with full native Fluent controls:
+
+Toggles, sliders, dropdowns
+
+Keybind configuration
+
+Colorpickers for FOV and ESP colors
+
+Organized tab layout (Legit Aim, Visuals, Settings)
+
+Optional watermark display
+
+Built-in unload button for safe cleanup
+
+Changelog (v7.0)
+
+Integrated Fluent's native keybind and colorpicker systems
+
+Added configurable prediction speed for dynamic target leading
+
+Simplified input handling using Fluent's state-based keybind API
+
+Updated visuals to support dynamic color updates from UI
+
+General cleanup and internal restructuring for improved readability and performance
+
+Requirements
+
+To run this script successfully, the executor must support:
+
+Drawing API (Drawing.new)
+
+HttpGet for loading the Fluent UI library
+
+Stable RenderStepped execution
+
+Performance will depend on hardware and the number of active Drawing objects.
+
+How the System Works
+Aimbot Processing
+
+Selects the closest viable target within the configured FOV radius.
+
+Applies alive, team, and wall checks when enabled.
+
+Calculates predicted aim position using distance-based time and user-defined prediction speed.
+
+Interpolates the camera toward the predicted target location using a smoothing factor.
+
+Applies configured hit chance before executing aim logic.
+
+ESP Rendering
+
+Maintains a cache of Drawing objects per player.
+
+Projects character positions onto the screen each frame.
+
+Draws ESP elements such as boxes, names, skeletons, health bars, and distances if enabled.
+
+Handles per-player cleanup when characters or players are removed.
+
+Configuration
+
+All core adjustable values are stored in the Settings table, for example:
+
+AimbotEnabled = false
+AimbotFOV = 100
+AimbotSmooth = 0.2
+AimbotHitChance = 100
+PredictionSpeed = 1000
+AimPart = "Head"
+BoxESP = false
+SkeletonESP = false
+NameESP = false
+HealthESP = false
+TeamCheck = false
+WallCheck = false
+ShowWatermark = true
+
+
+Most settings can also be modified directly through the Fluent UI.
+
+Script Unloading
+
+The script includes an unload function accessible in the Settings tab.
+Executing it will:
+
+Disconnect the RenderStepped loop
+
+Remove all Drawing objects
+
+Clear ESP caches
+
+Remove the FOV circle and watermark
+
+Destroy the Fluent UI window
+
+This ensures clean termination without requiring a client restart.
