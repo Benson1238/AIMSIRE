@@ -1,8 +1,8 @@
---[[
     AimRare Hub
-    Version: 7.2 (Wall Check + Keybind Fixes)
+    Version: 7.3 (Wall Check UI Toggle)
     Author: Ben
     Changelog:
+    - Added a visible Wall Check toggle to the UI so raycast filtering can be enabled without editing code.
     - Enforced wall checks inside the aimbot loop so targets behind cover are skipped in real time.
     - Normalized keybind detection so Rayfield string binds (e.g. "MB2") work with the aimbot toggles.
     - Added a Rayfield theme fallback and UI fixes to keep all tabs rendering when assets are missing.
@@ -15,8 +15,7 @@ local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
--- Locals & Micro-optimizations
-local VERSION = "7.2 (Wall Check + Keybind Fixes)"
+local VERSION = "7.3 (Wall Check UI Toggle)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
@@ -144,6 +143,7 @@ pcall(function()
 end)
 
 local UPDATE_LOG = {
+    "Added a visible Wall Check toggle to enable/disable occlusion checks from the UI",
     "Enforced wall checks inside the aimbot loop to skip obstructed targets in real time",
     "Normalized keybind detection so Rayfield string binds and enums both work",
     "Rayfield theme fallback keeps the UI stable when preferred assets are missing",
@@ -754,6 +754,15 @@ local function SetupUI()
             Flag = "VisibilityDelay",
             Callback = function(value)
                 Settings.VisibilityDelay = value
+            end
+        }))
+
+        registerOption("WallCheck", settingsTab:CreateToggle({
+            Name = "Wall Check (raycast occlusion)",
+            CurrentValue = Settings.WallCheck,
+            Flag = "WallCheck",
+            Callback = function(value)
+                Settings.WallCheck = value
             end
         }))
 
