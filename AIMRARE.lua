@@ -126,6 +126,13 @@ local function sanitizeEnum(value, fallback)
     return fallback
 end
 
+local function coerceKeycodeForUI(value, fallback)
+    if typeof(value) == "EnumItem" and value.EnumType == Enum.KeyCode then
+        return value
+    end
+    return fallback
+end
+
 -- Executor-agnostic mouse helpers
 local function pressMouse1()
     local mousePos = UserInputService:GetMouseLocation()
@@ -762,6 +769,8 @@ local function loadProfile(name)
         for k, v in pairs(decoded) do
             Settings[k] = v
         end
+        Settings.AimBind = sanitizeEnum(Settings.AimBind, Enum.UserInputType.MouseButton2)
+        Settings.AimBindSecondary = sanitizeEnum(Settings.AimBindSecondary, Enum.UserInputType.MouseButton3)
     end
 end
 
@@ -891,13 +900,17 @@ local function SetupUI()
             end
         }))
 
+        local aimBindDefault = coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E)
         registerOption("AimBind", legitTab:CreateKeybind({
             Name = "AimBind",
-            CurrentKeybind = keybindToText(Settings.AimBind, "E"),
+            CurrentKeybind = aimBindDefault,
             HoldToInteract = true,
             Flag = "AimBind",
             Callback = function(key)
                 Settings.AimBind = sanitizeEnum(key, Settings.AimBind)
+                if RayfieldOptions.AimBind and RayfieldOptions.AimBind.Set then
+                    RayfieldOptions.AimBind:Set(coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E))
+                end
             end
         }))
 
@@ -1046,13 +1059,17 @@ local function SetupUI()
             end
         }))
 
+        local aimBindSecondaryDefault = coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T)
         registerOption("AimBindSecondary", legitTab:CreateKeybind({
             Name = "Secondary AimBind",
-            CurrentKeybind = keybindToText(Settings.AimBindSecondary, "T"),
+            CurrentKeybind = aimBindSecondaryDefault,
             HoldToInteract = true,
             Flag = "AimBindSecondary",
             Callback = function(key)
                 Settings.AimBindSecondary = sanitizeEnum(key, Settings.AimBindSecondary)
+                if RayfieldOptions.AimBindSecondary and RayfieldOptions.AimBindSecondary.Set then
+                    RayfieldOptions.AimBindSecondary:Set(coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T))
+                end
             end
         }))
 
