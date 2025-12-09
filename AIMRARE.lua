@@ -15,6 +15,7 @@ local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 
 local VERSION = "8.1 (Input & Resilience)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
@@ -80,15 +81,31 @@ local Settings = {
     VisibilityDelay = 0,
     IgnoreAccessories = false,
 
-    -- Triggerbot
-    TriggerbotEnabled = false,
-    TriggerbotDelay = 50,
-    TriggerbotFireRate = 120,
-    TriggerbotHoldBind = Enum.UserInputType.MouseButton1,
-    TriggerbotRequiresAimbot = false,
-    TriggerbotTeamCheck = true,
-    TriggerbotWallCheck = true,
-    TriggerbotMaxDistance = 500,
+    -- Weapon & Prediction
+    AutoWeaponAdjust = true,
+    WeaponSpeedAttribute = "ProjectileSpeed",
+    WeaponSpreadAttribute = "Spread",
+    WeaponClassAttribute = "WeaponType",
+    RaycastMaxDistance = 1200,
+    MultiRayCount = 3,
+    AdaptivePrediction = true,
+    PredictionMissAdjust = 0.08,
+    TargetHoldTime = 0.4,
+    DistanceSmoothness = true,
+    NearSmoothMultiplier = 1.25,
+    FarSmoothMultiplier = 0.6,
+    AimWeights = { Head = 0.7, UpperTorso = 0.2, HumanoidRootPart = 0.1 },
+    AntiJitterRadiusX = 6,
+    AntiJitterRadiusY = 6,
+    DeadzoneScaleWithFOV = true,
+
+    -- ESP Extras
+    OffscreenIndicators = true,
+    OffscreenColor = Color3.fromRGB(255, 200, 65),
+    SkeletonProfile = "Full", -- Full, Competitive, Minimal
+    PlayerStateESP = true,
+    LOSHighlighting = true,
+
 }
 
 local MOUSE_INPUT_ALIASES = {
@@ -105,6 +122,13 @@ local function sanitizeEnum(value, fallback)
         return value
     elseif type(value) == "string" then
         return MOUSE_INPUT_ALIASES[value] or Enum.KeyCode[value] or Enum.UserInputType[value] or fallback
+    end
+    return fallback
+end
+
+local function coerceKeycodeForUI(value, fallback)
+    if typeof(value) == "EnumItem" and value.EnumType == Enum.KeyCode then
+        return value
     end
     return fallback
 end
@@ -144,29 +168,38 @@ local R6_Connections = {
     {"Head","Torso"}, {"Torso","Left Arm"}, {"Torso","Right Arm"}, {"Torso","Left Leg"}, {"Torso","Right Leg"}
 }
 
-local function ensureSkeletonLineCache(cache, rigType)
-    cache.SkeletonLines = cache.SkeletonLines or {}
-    cache._lastRigType = cache._lastRigType or rigType
-
-    if cache._lastRigType ~= rigType then
-        for i = #cache.SkeletonLines, 1, -1 do
-            if cache.SkeletonLines[i] and cache.SkeletonLines[i].Remove then
-                cache.SkeletonLines[i]:Remove()
-            end
-            cache.SkeletonLines[i] = nil
+local SkeletonProfiles = {
+    Full = function(rigType)
+        return rigType == Enum.HumanoidRigType.R15 and R15_Connections or R6_Connections
+    end,
+    Competitive = function(rigType)
+        if rigType == Enum.HumanoidRigType.R15 then
+            return {
+                {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+                {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"},
+                {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"},
+                {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"},
+                {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"},
+            }
         end
-        cache._lastRigType = rigType
-    end
-
-    local targetConnections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
-    for i = 1, #targetConnections do
-        if not cache.SkeletonLines[i] then
-            cache.SkeletonLines[i] = createLine()
+        return {
+            {"Head","Torso"}, {"Torso","Left Arm"}, {"Torso","Right Arm"},
+            {"Torso","Left Leg"}, {"Torso","Right Leg"}
+        }
+    end,
+    Minimal = function(rigType)
+        if rigType == Enum.HumanoidRigType.R15 then
+            return {
+                {"Head", "UpperTorso"}, {"UpperTorso", "LowerTorso"},
+                {"LowerTorso", "LeftUpperLeg"}, {"LowerTorso", "RightUpperLeg"},
+            }
         end
+        return {
+            {"Head","Torso"}
+        }
     end
-end
+}
 
--- Cache & Globals
 local ESP_Cache = {}
 local FOV_Circle_Legit = nil
 local LegitTarget = nil
@@ -184,14 +217,18 @@ RayParamsIgnoreTeam.IgnoreWater = true
 local RayIgnore = {}
 local LastVisibilityResult = {}
 local LastVelocityCache = {}
+local VelocityHistory = {}
 local AccessoryCache = {}
 local ViewportCache = {}
 local ViewportFrame = 0
 local EspAccumulator = 0
 local AimToggleState = false
 local LastPrimaryState, LastSecondaryState = false, false
-local LastTriggerTime = 0
-local LastShotTime = 0
+local WeaponState = { Speed = Settings.PredictionSpeed, Spread = 0, Class = "Generic", LastTool = nil }
+local TargetMemory = { Target = nil, LastSeen = 0, LastPosition = nil }
+
+local clearSkeletonLines -- forward declarations for drawing helpers
+local clearAllSkeletons
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
@@ -221,6 +258,7 @@ local UPDATE_LOG = {
     "Rayfield theme fallback keeps the UI stable when preferred assets are missing",
     "Advanced prediction modes with curve tuning and smoothing",
     "New aim activation modes, secondary bind, and target prioritization",
+    "Triggerbot removed because it made coding and debugging unnecessarily difficult",
 }
 
 local function GetEspInterval()
@@ -308,6 +346,51 @@ local function createLine()
     return line
 end
 
+local function ensureSkeletonLineCache(cache, rigType)
+    cache.SkeletonLines = cache.SkeletonLines or {}
+    cache._lastRigType = cache._lastRigType or rigType
+    cache._skeletonActive = cache._skeletonActive or false
+
+    if cache._lastRigType ~= rigType then
+        for i = #cache.SkeletonLines, 1, -1 do
+            if cache.SkeletonLines[i] and cache.SkeletonLines[i].Remove then
+                cache.SkeletonLines[i]:Remove()
+            end
+            cache.SkeletonLines[i] = nil
+        end
+        cache._lastRigType = rigType
+    end
+
+    local profile = SkeletonProfiles[Settings.SkeletonProfile] or SkeletonProfiles.Full
+    local targetConnections = profile(rigType)
+    for i = 1, #targetConnections do
+        if not cache.SkeletonLines[i] then
+            cache.SkeletonLines[i] = createLine()
+        end
+    end
+end
+
+function clearSkeletonLines(cache)
+    if not (cache and cache.SkeletonLines) then return end
+
+    for i = #cache.SkeletonLines, 1, -1 do
+        local line = cache.SkeletonLines[i]
+        if line and line.Remove then
+            line:Remove()
+        end
+        cache.SkeletonLines[i] = nil
+    end
+
+    cache._lastRigType = nil
+    cache._skeletonActive = false
+end
+
+function clearAllSkeletons()
+    for _, cache in pairs(ESP_Cache) do
+        clearSkeletonLines(cache)
+    end
+end
+
 local function createBoxStructure()
     local objects = {
         BoxOutline = Drawing.new("Square"),
@@ -315,7 +398,9 @@ local function createBoxStructure()
         HealthOutline = Drawing.new("Line"),
         HealthBar = Drawing.new("Line"),
         Name = createText(),
-        Distance = createText()
+        Distance = createText(),
+        State = createText(),
+        Offscreen = Drawing.new("Triangle")
     }
 
     objects.BoxOutline.Color = Color3new(0,0,0)
@@ -331,6 +416,17 @@ local function createBoxStructure()
 
     objects.HealthBar.Color = Color3new(0, 1, 0)
     objects.HealthBar.Thickness = 2
+
+    if objects.Offscreen then
+        objects.Offscreen.Visible = false
+        objects.Offscreen.Color = Settings.OffscreenColor
+        objects.Offscreen.Filled = true
+        objects.Offscreen.Transparency = 0.9
+    end
+
+    if objects.State then
+        objects.State.Center = true
+    end
 
     return objects
 end
@@ -367,10 +463,16 @@ local function HideAllESP()
             if cache.Objects.HealthOutline then cache.Objects.HealthOutline.Visible = false end
             if cache.Objects.Name then cache.Objects.Name.Visible = false end
             if cache.Objects.Distance then cache.Objects.Distance.Visible = false end
+            if cache.Objects.State then cache.Objects.State.Visible = false end
+            if cache.Objects.Offscreen then cache.Objects.Offscreen.Visible = false end
         end
         if cache.SkeletonLines then
-            for _, line in pairs(cache.SkeletonLines) do
-                line.Visible = false
+            if Settings.SkeletonESP then
+                for _, line in pairs(cache.SkeletonLines) do
+                    line.Visible = false
+                end
+            else
+                clearSkeletonLines(cache)
             end
         end
     end
@@ -463,15 +565,78 @@ local function PerformWallCheck(target, aimPart, forceEnabled)
     params.FilterDescendantsInstances = ignoreList
 
     local origin = Camera.CFrame.Position
-    local direction = aimPart.Position - origin
-    local result = Workspace:Raycast(origin, direction, params)
-    local visible = result == nil
+    local distance = (aimPart.Position - origin).Magnitude
+    if Settings.RaycastMaxDistance > 0 and distance > Settings.RaycastMaxDistance then
+        LastVisibilityResult[target] = { Time = now, Visible = true }
+        return true
+    end
+
+    local raysToCast = math.clamp(Settings.MultiRayCount or 1, 1, 5)
+    local hitCount = 0
+    local total = 0
+    local targets = {
+        aimPart,
+        character:FindFirstChild("Head"),
+        character:FindFirstChild("UpperTorso"),
+        character:FindFirstChild("HumanoidRootPart"),
+        character:FindFirstChild("LeftFoot")
+    }
+
+    for i = 1, raysToCast do
+        local candidate = targets[i]
+        if candidate then
+            total += 1
+            local direction = candidate.Position - origin
+            local result = Workspace:Raycast(origin, direction, params)
+            if not result then
+                hitCount += 1
+            end
+        end
+    end
+
+    local visible = total == 0 or (hitCount / total) >= 0.5
 
     LastVisibilityResult[target] = { Time = now, Visible = visible }
     return visible
 end
 
 -- Predict target movement for smoother aim leading
+local function UpdateWeaponProfile()
+    if not Settings.AutoWeaponAdjust then return end
+    local character = LocalPlayer.Character
+    if not character then return end
+
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool ~= WeaponState.LastTool then
+        WeaponState.LastTool = tool
+        if tool then
+            local speed = tool:GetAttribute(Settings.WeaponSpeedAttribute) or tool:FindFirstChild(Settings.WeaponSpeedAttribute)
+            local spread = tool:GetAttribute(Settings.WeaponSpreadAttribute) or tool:FindFirstChild(Settings.WeaponSpreadAttribute)
+            local class = tool:GetAttribute(Settings.WeaponClassAttribute) or tool:FindFirstChild(Settings.WeaponClassAttribute)
+
+            WeaponState.Speed = tonumber(speed and speed.Value or speed) or Settings.PredictionSpeed
+            WeaponState.Spread = tonumber(spread and spread.Value or spread) or 0
+            WeaponState.Class = tostring(class and (class.Value or class)) or "Generic"
+        else
+            WeaponState.Speed = Settings.PredictionSpeed
+            WeaponState.Spread = 0
+            WeaponState.Class = "Generic"
+        end
+    end
+end
+
+local function resolvePredictionSpeed()
+    UpdateWeaponProfile()
+    local base = WeaponState.Speed or Settings.PredictionSpeed
+    local spread = WeaponState.Spread or 0
+    if WeaponState.Class == "Shotgun" or spread > 0.5 then
+        base = base * (1 - math.clamp(spread, 0, 0.6))
+    elseif WeaponState.Class == "Sniper" then
+        base = base * 1.1
+    end
+    return base
+end
+
 local function PredictMovement(target)
     local character = target and target.Character
     if not character then return nil end
@@ -493,9 +658,21 @@ local function PredictMovement(target)
         velocity = cached:Lerp(velocity, math.clamp(Settings.PredictionSmoothing, 0, 1))
     end
     LastVelocityCache[target] = velocity
+    if Settings.AdaptivePrediction then
+        local list = VelocityHistory[target] or {}
+        list[#list + 1] = velocity
+        if #list > 5 then table.remove(list, 1) end
+        VelocityHistory[target] = list
+    end
 
     local distance = (aimPart.Position - Camera.CFrame.Position).Magnitude
-    local speedDivisor = Settings.PredictionSpeed > 0 and Settings.PredictionSpeed or 700
+    local speedDivisor = resolvePredictionSpeed()
+    if Settings.AdaptivePrediction and VelocityHistory[target] then
+        local history = VelocityHistory[target]
+        local aggregate = Vector3.zero
+        for i = 1, #history do aggregate += history[i] end
+        speedDivisor = math.max(50, speedDivisor - (#history > 0 and aggregate.Magnitude / #history or 0) * Settings.PredictionMissAdjust * 100)
+    end
     local baseTime = math.clamp(distance / speedDivisor, 0, 1) -- distance-scaled leading
     local mode = Settings.PredictionMode
     local curve = math.max(Settings.PredictionCurve, 0.1)
@@ -519,6 +696,14 @@ local function GetTarget(fovLimit)
     local bestScore = math.huge
     local mousePos = UserInputService:GetMouseLocation()
     local priority = Settings.TargetPriority
+
+    if TargetMemory.Target and tick() - TargetMemory.LastSeen < Settings.TargetHoldTime then
+        local t = TargetMemory.Target
+        if t.Character and t.Character:FindFirstChild(Settings.AimPart) then
+            closestPlayer = t
+            bestScore = 0
+        end
+    end
 
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(Settings.AimPart) then
@@ -566,6 +751,28 @@ end
 local Rayfield
 local RayfieldWindow
 local RayfieldOptions = {}
+local DebugParagraph
+
+local function saveProfile(name)
+    if not writefile or not HttpService then return end
+    local safeName = tostring(name or "default")
+    local data = HttpService:JSONEncode(Settings)
+    pcall(writefile, safeName .. ".json", data)
+end
+
+local function loadProfile(name)
+    if not readfile or not HttpService then return end
+    local safeName = tostring(name or "default")
+    local ok, raw = pcall(readfile, safeName .. ".json")
+    if ok and raw then
+        local decoded = HttpService:JSONDecode(raw)
+        for k, v in pairs(decoded) do
+            Settings[k] = v
+        end
+        Settings.AimBind = sanitizeEnum(Settings.AimBind, Enum.UserInputType.MouseButton2)
+        Settings.AimBindSecondary = sanitizeEnum(Settings.AimBindSecondary, Enum.UserInputType.MouseButton3)
+    end
+end
 
 local function createFallbackRayfield()
     local function makeControl(callback)
@@ -636,7 +843,12 @@ end
 
 local function keybindToText(value, fallback)
     if typeof(value) == "EnumItem" then
-        return value.Name
+        if value.EnumType == Enum.KeyCode then
+            return value.Name
+        elseif value.EnumType == Enum.UserInputType then
+            -- Rayfield keybinds expect KeyCodes; fall back to a safe display key for mouse binds
+            return fallback or "E"
+        end
     elseif type(value) == "string" then
         return value
     end
@@ -688,13 +900,17 @@ local function SetupUI()
             end
         }))
 
+        local aimBindDefault = keybindToText(coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E), "E")
         registerOption("AimBind", legitTab:CreateKeybind({
             Name = "AimBind",
-            CurrentKeybind = keybindToText(Settings.AimBind, "MouseButton2"),
+            CurrentKeybind = aimBindDefault,
             HoldToInteract = true,
             Flag = "AimBind",
             Callback = function(key)
                 Settings.AimBind = sanitizeEnum(key, Settings.AimBind)
+                if RayfieldOptions.AimBind and RayfieldOptions.AimBind.Set then
+                    RayfieldOptions.AimBind:Set(keybindToText(coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E), "E"))
+                end
             end
         }))
 
@@ -772,6 +988,55 @@ local function SetupUI()
             end
         }))
 
+        registerOption("AutoWeaponAdjust", legitTab:CreateToggle({
+            Name = "Auto Weapon Adjust",
+            CurrentValue = Settings.AutoWeaponAdjust,
+            Flag = "AutoWeaponAdjust",
+            Callback = function(value)
+                Settings.AutoWeaponAdjust = value
+            end
+        }))
+
+        registerOption("AdaptivePrediction", legitTab:CreateToggle({
+            Name = "Adaptive Prediction",
+            CurrentValue = Settings.AdaptivePrediction,
+            Flag = "AdaptivePrediction",
+            Callback = function(value)
+                Settings.AdaptivePrediction = value
+            end
+        }))
+
+        registerOption("DistanceSmoothness", legitTab:CreateToggle({
+            Name = "Distance Based Smooth",
+            CurrentValue = Settings.DistanceSmoothness,
+            Flag = "DistanceSmoothness",
+            Callback = function(value)
+                Settings.DistanceSmoothness = value
+            end
+        }))
+
+        registerOption("AntiJitterRadiusX", legitTab:CreateSlider({
+            Name = "Deadzone X",
+            Range = {0, 25},
+            Increment = 1,
+            CurrentValue = Settings.AntiJitterRadiusX,
+            Flag = "AntiJitterRadiusX",
+            Callback = function(value)
+                Settings.AntiJitterRadiusX = value
+            end
+        }))
+
+        registerOption("AntiJitterRadiusY", legitTab:CreateSlider({
+            Name = "Deadzone Y",
+            Range = {0, 25},
+            Increment = 1,
+            CurrentValue = Settings.AntiJitterRadiusY,
+            Flag = "AntiJitterRadiusY",
+            Callback = function(value)
+                Settings.AntiJitterRadiusY = value
+            end
+        }))
+
         registerOption("AimPart", legitTab:CreateDropdown({
             Name = "Aim Part",
             Options = {"Head", "UpperTorso", "HumanoidRootPart"},
@@ -794,13 +1059,17 @@ local function SetupUI()
             end
         }))
 
+        local aimBindSecondaryDefault = keybindToText(coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T), "T")
         registerOption("AimBindSecondary", legitTab:CreateKeybind({
             Name = "Secondary AimBind",
-            CurrentKeybind = keybindToText(Settings.AimBindSecondary, "MouseButton3"),
+            CurrentKeybind = aimBindSecondaryDefault,
             HoldToInteract = true,
             Flag = "AimBindSecondary",
             Callback = function(key)
                 Settings.AimBindSecondary = sanitizeEnum(key, Settings.AimBindSecondary)
+                if RayfieldOptions.AimBindSecondary and RayfieldOptions.AimBindSecondary.Set then
+                    RayfieldOptions.AimBindSecondary:Set(keybindToText(coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T), "T"))
+                end
             end
         }))
 
@@ -856,87 +1125,6 @@ local function SetupUI()
             end
         }))
 
-        legitTab:CreateSection("Triggerbot")
-
-        registerOption("TriggerbotEnabled", legitTab:CreateToggle({
-            Name = "Triggerbot Enabled",
-            CurrentValue = Settings.TriggerbotEnabled,
-            Flag = "TriggerbotEnabled",
-            Callback = function(value)
-                Settings.TriggerbotEnabled = value
-            end
-        }))
-
-        registerOption("TriggerbotHoldBind", legitTab:CreateKeybind({
-            Name = "Triggerbot Bind",
-            CurrentKeybind = keybindToText(Settings.TriggerbotHoldBind, "MouseButton1"),
-            HoldToInteract = true,
-            Flag = "TriggerbotHoldBind",
-            Callback = function(key)
-                Settings.TriggerbotHoldBind = sanitizeEnum(key, Settings.TriggerbotHoldBind)
-            end
-        }))
-
-        registerOption("TriggerbotDelay", legitTab:CreateSlider({
-            Name = "Shot Delay (ms)",
-            Range = {0, 250},
-            Increment = 5,
-            CurrentValue = Settings.TriggerbotDelay,
-            Flag = "TriggerbotDelay",
-            Callback = function(value)
-                Settings.TriggerbotDelay = value
-            end
-        }))
-
-        registerOption("TriggerbotFireRate", legitTab:CreateSlider({
-            Name = "Fire Rate Limit (ms)",
-            Range = {50, 500},
-            Increment = 5,
-            CurrentValue = Settings.TriggerbotFireRate,
-            Flag = "TriggerbotFireRate",
-            Callback = function(value)
-                Settings.TriggerbotFireRate = value
-            end
-        }))
-
-        registerOption("TriggerbotRequiresAimbot", legitTab:CreateToggle({
-            Name = "Only Shoot When Aimbot Active",
-            CurrentValue = Settings.TriggerbotRequiresAimbot,
-            Flag = "TriggerbotRequiresAimbot",
-            Callback = function(value)
-                Settings.TriggerbotRequiresAimbot = value
-            end
-        }))
-
-        registerOption("TriggerbotTeamCheck", legitTab:CreateToggle({
-            Name = "Triggerbot Team Check",
-            CurrentValue = Settings.TriggerbotTeamCheck,
-            Flag = "TriggerbotTeamCheck",
-            Callback = function(value)
-                Settings.TriggerbotTeamCheck = value
-            end
-        }))
-
-        registerOption("TriggerbotWallCheck", legitTab:CreateToggle({
-            Name = "Triggerbot Wall Check",
-            CurrentValue = Settings.TriggerbotWallCheck,
-            Flag = "TriggerbotWallCheck",
-            Callback = function(value)
-                Settings.TriggerbotWallCheck = value
-            end
-        }))
-
-        registerOption("TriggerbotMaxDistance", legitTab:CreateSlider({
-            Name = "Triggerbot Max Distance",
-            Range = {50, 1000},
-            Increment = 10,
-            CurrentValue = Settings.TriggerbotMaxDistance,
-            Flag = "TriggerbotMaxDistance",
-            Callback = function(value)
-                Settings.TriggerbotMaxDistance = value
-            end
-        }))
-
         -- Visuals
         registerOption("BoxESP", visualsTab:CreateToggle({
             Name = "Box ESP",
@@ -953,6 +1141,7 @@ local function SetupUI()
             Flag = "SkeletonESP",
             Callback = function(value)
                 Settings.SkeletonESP = value
+                clearAllSkeletons()
             end
         }))
 
@@ -980,6 +1169,35 @@ local function SetupUI()
             Flag = "TeamCheck",
             Callback = function(value)
                 Settings.TeamCheck = value
+            end
+        }))
+
+        registerOption("OffscreenIndicators", visualsTab:CreateToggle({
+            Name = "Offscreen Indicators",
+            CurrentValue = Settings.OffscreenIndicators,
+            Flag = "OffscreenIndicators",
+            Callback = function(value)
+                Settings.OffscreenIndicators = value
+            end
+        }))
+
+        registerOption("PlayerStateESP", visualsTab:CreateToggle({
+            Name = "Player State ESP",
+            CurrentValue = Settings.PlayerStateESP,
+            Flag = "PlayerStateESP",
+            Callback = function(value)
+                Settings.PlayerStateESP = value
+            end
+        }))
+
+        registerOption("SkeletonProfile", visualsTab:CreateDropdown({
+            Name = "Skeleton Profile",
+            Options = {"Full", "Competitive", "Minimal"},
+            CurrentOption = {Settings.SkeletonProfile},
+            Flag = "SkeletonProfile",
+            Callback = function(value)
+                Settings.SkeletonProfile = type(value) == "table" and value[1] or value
+                clearAllSkeletons()
             end
         }))
 
@@ -1032,6 +1250,15 @@ local function SetupUI()
             end
         }))
 
+        registerOption("LOSHighlighting", visualsTab:CreateToggle({
+            Name = "Line-of-Sight Tint",
+            CurrentValue = Settings.LOSHighlighting,
+            Flag = "LOSHighlighting",
+            Callback = function(value)
+                Settings.LOSHighlighting = value
+            end
+        }))
+
         registerOption("FPSSafeSkeleton", visualsTab:CreateToggle({
             Name = "FPS Safe Skeleton",
             CurrentValue = Settings.FPSSafeSkeleton,
@@ -1072,6 +1299,28 @@ local function SetupUI()
             end
         }))
 
+        registerOption("MultiRayCount", settingsTab:CreateSlider({
+            Name = "Multi-Ray Count",
+            Range = {1, 5},
+            Increment = 1,
+            CurrentValue = Settings.MultiRayCount,
+            Flag = "MultiRayCount",
+            Callback = function(value)
+                Settings.MultiRayCount = value
+            end
+        }))
+
+        registerOption("RaycastMaxDistance", settingsTab:CreateSlider({
+            Name = "Raycast Max Distance",
+            Range = {300, 2000},
+            Increment = 10,
+            CurrentValue = Settings.RaycastMaxDistance,
+            Flag = "RaycastMaxDistance",
+            Callback = function(value)
+                Settings.RaycastMaxDistance = value
+            end
+        }))
+
         registerOption("IgnoreAccessories", settingsTab:CreateToggle({
             Name = "Ignore Accessories in Raycast",
             CurrentValue = Settings.IgnoreAccessories,
@@ -1080,6 +1329,34 @@ local function SetupUI()
                 Settings.IgnoreAccessories = value
             end
         }))
+
+        DebugParagraph = settingsTab:CreateParagraph({
+            Title = "Live Debug",
+            Content = "Target: None\nPrediction: 0\nVelocity: 0\nVisible: N/A\nHitChance: 0"
+        })
+
+        registerOption("ProfileName", settingsTab:CreateInput({
+            Name = "Profile Name",
+            PlaceholderText = "legit.json",
+            RemoveTextAfterFocusLost = false,
+            Callback = function(value)
+                Settings.ProfileName = value
+            end
+        }))
+
+        settingsTab:CreateButton({
+            Name = "Save Profile",
+            Callback = function()
+                saveProfile(Settings.ProfileName or "legit")
+            end
+        })
+
+        settingsTab:CreateButton({
+            Name = "Load Profile",
+            Callback = function()
+                loadProfile(Settings.ProfileName or "legit")
+            end
+        })
 
         registerOption("UnloadButton", settingsTab:CreateButton({
             Name = "Unload Script",
@@ -1113,8 +1390,8 @@ local function SetupUI()
                 Duration = 8
             })
             Rayfield:Notify({
-                Title = "Triggerbot Status",
-                Content = "Triggerbot is currently under cunrstruction It will not work good or will completly not work",
+                Title = "Triggerbot Removed",
+                Content = "Triggerbot made coding and code debugging very hard so we deleted it.",
                 Duration = 10
             })
         end
@@ -1146,7 +1423,10 @@ end
 -- Anti-jitter guard for near-center targets
 local function IsNearCenter(position2d)
     local viewportCenter = Camera.ViewportSize / 2
-    return (Vector2new(position2d.X, position2d.Y) - Vector2new(viewportCenter.X, viewportCenter.Y)).Magnitude <= Settings.AntiJitterRadius
+    local dx = math.abs(position2d.X - viewportCenter.X)
+    local dy = math.abs(position2d.Y - viewportCenter.Y)
+    local scale = Settings.DeadzoneScaleWithFOV and (Settings.AimbotFOV / 100) or 1
+    return dx <= Settings.AntiJitterRadiusX * scale and dy <= Settings.AntiJitterRadiusY * scale
 end
 
 -- UI refresh separated for clarity
@@ -1181,6 +1461,20 @@ local function UpdateUI(dt)
         end
     end
 
+    if DebugParagraph then
+        local targetName = LegitTarget and LegitTarget.Name or "None"
+        local velocity = LegitTarget and tostring((LastVelocityCache[LegitTarget] or Vector3.zero).Magnitude) or "0"
+        local visible = LegitTarget and (LastVisibilityResult[LegitTarget] and tostring(LastVisibilityResult[LegitTarget].Visible)) or "N/A"
+        DebugParagraph:Set(string.format(
+            "Target: %s\nPrediction: %.0f\nVelocity: %s\nVisible: %s\nHitChance: %d",
+            targetName,
+            Settings.PredictionSpeed,
+            velocity,
+            visible,
+            Settings.AimbotHitChance
+        ))
+    end
+
     return mouseLoc
 end
 
@@ -1195,32 +1489,50 @@ local function UpdateAimbot(dt, primaryState, secondaryState)
     LegitTarget = GetTarget(Settings.AimbotFOV)
 
     if LegitTarget and LegitTarget.Character and LegitTarget.Character:FindFirstChild(Settings.AimPart) then
+        TargetMemory.Target = LegitTarget
         if MathRandom(1, 100) <= Settings.AimbotHitChance then
             local aimPart
-            local aimChoices = { Settings.AimPart, "UpperTorso", "HumanoidRootPart" }
+            local aimChoices = { "Head", "UpperTorso", "HumanoidRootPart" }
+            local roll = math.random()
+            local accum = 0
             for _, partName in ipairs(aimChoices) do
-                local candidate = LegitTarget.Character:FindFirstChild(partName)
-                if candidate then
-                    if Settings.WallCheck and not PerformWallCheck(LegitTarget, candidate) then
-                        continue
-                    end
-                    aimPart = candidate
+                accum += Settings.AimWeights[partName] or 0
+                if roll <= accum then
+                    aimPart = LegitTarget.Character:FindFirstChild(partName)
                     break
+                end
+            end
+            if not aimPart then
+                for _, partName in ipairs(aimChoices) do
+                    local candidate = LegitTarget.Character:FindFirstChild(partName)
+                    if candidate then aimPart = candidate break end
                 end
             end
 
             if not aimPart then return shouldAim end
 
+            if Settings.WallCheck and not PerformWallCheck(LegitTarget, aimPart) then
+                return shouldAim
+            end
+
             local pos, onScreen = GetViewportPosition(aimPart)
-            if Settings.AntiJitterRadius > 0 and onScreen and IsNearCenter(pos) then
+            local deadzone = math.max(Settings.AntiJitterRadiusX, Settings.AntiJitterRadiusY)
+            if deadzone > 0 and onScreen and IsNearCenter(pos) then
                 return shouldAim
             end
 
             local predicted = PredictMovement(LegitTarget)
             local aimPos = predicted or aimPart.Position
+            TargetMemory.LastSeen = tick()
+            TargetMemory.LastPosition = aimPos
             local currentCFrame = Camera.CFrame
             local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
             local alpha = resolveSmoothingAlpha(dt)
+            if Settings.DistanceSmoothness then
+                local distance = (aimPos - currentCFrame.Position).Magnitude
+                local factor = distance > 400 and Settings.FarSmoothMultiplier or Settings.NearSmoothMultiplier
+                alpha = math.clamp(alpha * factor, 0, 1)
+            end
 
             if Settings.UseEasing then
                 alpha = easeOutQuad(alpha)
@@ -1230,58 +1542,6 @@ local function UpdateAimbot(dt, primaryState, secondaryState)
         end
     end
     return shouldAim
-end
-
--- Triggerbot implementation using camera->mouse raycast
-local function UpdateTriggerbot(dt, mouseLoc, aimingActive)
-    if not Settings.TriggerbotEnabled then return end
-    if Settings.TriggerbotRequiresAimbot and not aimingActive then return end
-    if Settings.TriggerbotHoldBind and not GetBindState("TriggerbotHoldBind") then return end
-
-    local now = tick()
-    local delaySec = Settings.TriggerbotDelay / 1000
-    local rateSec = Settings.TriggerbotFireRate / 1000
-    if now - LastShotTime < rateSec or now - LastTriggerTime < delaySec then
-        return
-    end
-
-    local ray = Camera:ViewportPointToRay(mouseLoc.X, mouseLoc.Y)
-    local params, ignoreList = GetRayParams(Settings.IgnoreAccessories, false)
-    ignoreList[2] = LocalPlayer.Character
-    params.FilterDescendantsInstances = ignoreList
-
-    local result = Workspace:Raycast(ray.Origin, ray.Direction * Settings.TriggerbotMaxDistance, params)
-    if not result or not result.Instance then return end
-
-    local model = result.Instance:FindFirstAncestorWhichIsA("Model")
-    if not model then return end
-    local player = Players:GetPlayerFromCharacter(model)
-    if not player or player == LocalPlayer then return end
-
-    if Settings.TriggerbotTeamCheck and player.Team == LocalPlayer.Team then return end
-
-    local hitPartName = result.Instance.Name
-    local important = hitPartName == "Head" or hitPartName == "HumanoidRootPart" or hitPartName == "UpperTorso"
-    if not important then return end
-
-    if Settings.TriggerbotWallCheck and not PerformWallCheck(player, result.Instance, true) then
-        return
-    end
-
-    local distance = (result.Position - Camera.CFrame.Position).Magnitude
-    if distance > Settings.TriggerbotMaxDistance then return end
-
-    -- Apply the shot after respecting delay and rate limits
-    LastTriggerTime = now
-    task.delay(delaySec, function()
-        if tick() - LastShotTime < rateSec then return end
-        LastShotTime = tick()
-        pcall(function()
-            pressMouse1()
-            task.wait(0.02)
-            releaseMouse1()
-        end)
-    end)
 end
 
 -- ESP drawing helpers
@@ -1312,29 +1572,53 @@ local function DrawHealthESP(objs, boxPos, boxHeight, healthPercent)
     objs.HealthBar.Visible = true
 end
 
+local function DrawOffscreenArrow(objs, screenPos, color)
+    if not objs.Offscreen then return end
+    local center = Camera.ViewportSize / 2
+    local dir = (Vector2new(screenPos.X, screenPos.Y) - center).Unit
+    local edgePos = center + dir * math.min(center.X, center.Y)
+    local perp = Vector2new(-dir.Y, dir.X) * 10
+    objs.Offscreen.PointA = edgePos
+    objs.Offscreen.PointB = edgePos - dir * 20 + perp
+    objs.Offscreen.PointC = edgePos - dir * 20 - perp
+    objs.Offscreen.Color = color
+    objs.Offscreen.Visible = true
+end
+
 local function DrawSkeleton(char, hum, cache, color)
     local rigType = hum.RigType
     ensureSkeletonLineCache(cache, rigType)
-    local connections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
-    for i, pair in ipairs(connections) do
-        local pA = char:FindFirstChild(pair[1])
-        local pB = char:FindFirstChild(pair[2])
+    cache._skeletonActive = true
+    local profile = SkeletonProfiles[Settings.SkeletonProfile] or SkeletonProfiles.Full
+    local connections = profile(rigType)
+    local posCache = {}
 
-        if pA and pB then
-            local vA, visA = GetViewportPosition(pA)
-            local vB, visB = GetViewportPosition(pB)
-
-            local line = cache.SkeletonLines[i]
-            if visA and visB and line then
-                line.From = Vector2new(vA.X, vA.Y)
-                line.To = Vector2new(vB.X, vB.Y)
-                line.Color = color
-                line.Visible = true
-            elseif line then
-                line.Visible = false
+    for _, pair in ipairs(connections) do
+        for _, boneName in ipairs(pair) do
+            if not posCache[boneName] then
+                local bone = char:FindFirstChild(boneName)
+                if bone then
+                    local pos, vis = GetViewportPosition(bone)
+                    posCache[boneName] = { pos = pos, visible = vis }
+                else
+                    posCache[boneName] = false
+                end
             end
-        elseif cache.SkeletonLines[i] then
-            cache.SkeletonLines[i].Visible = false
+        end
+    end
+
+    for i, pair in ipairs(connections) do
+        local boneA = posCache[pair[1]]
+        local boneB = posCache[pair[2]]
+        local line = cache.SkeletonLines[i]
+
+        if boneA and boneB and line and boneA.visible and boneB.visible then
+            line.From = Vector2new(boneA.pos.X, boneA.pos.Y)
+            line.To = Vector2new(boneB.pos.X, boneB.pos.Y)
+            line.Color = color
+            line.Visible = true
+        elseif line then
+            line.Visible = false
         end
     end
 end
@@ -1386,12 +1670,14 @@ local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
         local objs = cache.Objects
 
         if onScreen and vector.Z > 0 then
+            if objs.Offscreen then objs.Offscreen.Visible = false end
             local distance = vector.Z
             if distance > 600 then
                 -- Skip expensive ESP for far targets
                 if objs.Box then objs.Box.Visible = false end
                 if objs.BoxOutline then objs.BoxOutline.Visible = false end
                 for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+                if objs.State then objs.State.Visible = false end
                 continue
             end
 
@@ -1429,21 +1715,42 @@ local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
                 objs.Distance.Text = MathFloor(vector.Z) .. " studs"
                 objs.Distance.Position = Vector2new(vector.X, boxPos.Y + boxHeight + 5)
                 objs.Distance.Visible = true
+                if Settings.PlayerStateESP and objs.State then
+                    local stateLabel = hum:GetState().Name
+                    objs.State.Text = stateLabel
+                    objs.State.Position = Vector2new(vector.X, boxPos.Y + boxHeight + 20)
+                    objs.State.Color = colorProfile
+                    objs.State.Visible = true
+                elseif objs.State then
+                    objs.State.Visible = false
+                end
             else
                 if objs.Name then objs.Name.Visible = false end
                 if objs.Distance then objs.Distance.Visible = false end
+                if objs.State then objs.State.Visible = false end
             end
 
             local skeletonEnabled = Settings.SkeletonESP and not (Settings.FPSSafeSkeleton and Workspace:GetRealPhysicsFPS() < 55)
             if skeletonEnabled then
                 DrawSkeleton(char, hum, cache, colorProfile)
             else
-                for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+                if cache._skeletonActive then
+                    clearSkeletonLines(cache)
+                end
             end
 
             -- Occlusion ESP tinting
             if Settings.WallCheck and Settings.BoxESP then
-                if not PerformWallCheck(player, hrp) then
+                local visible = PerformWallCheck(player, hrp)
+                if Settings.LOSHighlighting then
+                    if not visible then
+                        objs.Box.Color = OCCLUDED_COLOR
+                    elseif hum.Target and hum.Target == LocalPlayer.Character then
+                        objs.Box.Color = Color3.fromRGB(255, 85, 85)
+                    else
+                        objs.Box.Color = colorProfile
+                    end
+                elseif not visible then
                     objs.Box.Color = OCCLUDED_COLOR
                 end
             end
@@ -1454,7 +1761,17 @@ local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
             if objs.HealthOutline then objs.HealthOutline.Visible = false end
             if objs.Name then objs.Name.Visible = false end
             if objs.Distance then objs.Distance.Visible = false end
-            for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+            if objs.State then objs.State.Visible = false end
+            if Settings.OffscreenIndicators and objs.Offscreen then
+                DrawOffscreenArrow(objs, vector, Settings.OffscreenColor)
+            elseif objs.Offscreen then
+                objs.Offscreen.Visible = false
+            end
+            if Settings.SkeletonESP then
+                for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+            elseif cache._skeletonActive then
+                clearSkeletonLines(cache)
+            end
         end
     end
 end
@@ -1481,7 +1798,5 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
     local primaryState = GetBindState("AimBind")
     local secondaryState = GetBindState("AimBindSecondary")
     local aimingActive = UpdateAimbot(dt, primaryState, secondaryState)
-
-    UpdateTriggerbot(dt, mouseLoc, aimingActive)
     UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
 end)
