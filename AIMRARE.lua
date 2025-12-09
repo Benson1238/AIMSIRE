@@ -16,7 +16,7 @@ local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
-local VERSION = "8.0 (Triggerbot & Optimizations)"
+local VERSION = "8.1 (Input & Resilience)"
 local ACCENT_COLOR = Color3.fromRGB(255, 65, 65)
 local DEFAULT_ESP_COLOR = ACCENT_COLOR
 local DEFAULT_FOV_COLOR = Color3.new(1, 1, 1)
@@ -29,6 +29,7 @@ local Vector2new = Vector2.new
 local Color3new = Color3.new
 local MathFloor = math.floor
 local MathRandom = math.random
+local VirtualInputManager = game:FindService("VirtualInputManager") or game:GetService("VirtualInputManager")
 
 -- Check if Drawing API exists
 if not Drawing then
@@ -108,6 +109,29 @@ local function sanitizeEnum(value, fallback)
     return fallback
 end
 
+-- Executor-agnostic mouse helpers
+local function pressMouse1()
+    local mousePos = UserInputService:GetMouseLocation()
+    if VirtualInputManager and VirtualInputManager.SendMouseButtonEvent then
+        VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 0)
+    elseif typeof(mouse1press) == "function" then
+        mouse1press()
+    else
+        warn("AimRare Hub: No compatible MouseButton1 press method available.")
+    end
+end
+
+local function releaseMouse1()
+    local mousePos = UserInputService:GetMouseLocation()
+    if VirtualInputManager and VirtualInputManager.SendMouseButtonEvent then
+        VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 0)
+    elseif typeof(mouse1release) == "function" then
+        mouse1release()
+    else
+        warn("AimRare Hub: No compatible MouseButton1 release method available.")
+    end
+end
+
 -- Constants for Skeleton ESP (Moved out of loop for performance)
 local R15_Connections = {
     {"Head","UpperTorso"}, {"UpperTorso","LowerTorso"}, {"LowerTorso","LeftUpperLeg"},
@@ -119,6 +143,28 @@ local R15_Connections = {
 local R6_Connections = {
     {"Head","Torso"}, {"Torso","Left Arm"}, {"Torso","Right Arm"}, {"Torso","Left Leg"}, {"Torso","Right Leg"}
 }
+
+local function ensureSkeletonLineCache(cache, rigType)
+    cache.SkeletonLines = cache.SkeletonLines or {}
+    cache._lastRigType = cache._lastRigType or rigType
+
+    if cache._lastRigType ~= rigType then
+        for i = #cache.SkeletonLines, 1, -1 do
+            if cache.SkeletonLines[i] and cache.SkeletonLines[i].Remove then
+                cache.SkeletonLines[i]:Remove()
+            end
+            cache.SkeletonLines[i] = nil
+        end
+        cache._lastRigType = rigType
+    end
+
+    local targetConnections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
+    for i = 1, #targetConnections do
+        if not cache.SkeletonLines[i] then
+            cache.SkeletonLines[i] = createLine()
+        end
+    end
+end
 
 -- Cache & Globals
 local ESP_Cache = {}
@@ -521,6 +567,67 @@ local Rayfield
 local RayfieldWindow
 local RayfieldOptions = {}
 
+local function createFallbackRayfield()
+    local function makeControl(callback)
+        return {
+            Set = function(_, value)
+                if callback then pcall(callback, value) end
+            end
+        }
+    end
+
+    local tabProto = {}
+    function tabProto:CreateToggle(props)
+        return makeControl(props and props.Callback)
+    end
+    function tabProto:CreateKeybind(props)
+        return makeControl(props and props.Callback)
+    end
+    function tabProto:CreateSlider(props)
+        return makeControl(props and props.Callback)
+    end
+    function tabProto:CreateDropdown(props)
+        return makeControl(props and props.Callback)
+    end
+    function tabProto:CreateColorPicker(props)
+        return makeControl(props and props.Callback)
+    end
+    function tabProto:CreateInput(props)
+        return makeControl(props and props.Callback)
+    end
+    function tabProto:CreateParagraph()
+        return makeControl(nil)
+    end
+
+    local function createTab()
+        local tab = {}
+        for key, fn in pairs(tabProto) do
+            tab[key] = fn
+        end
+        return tab
+    end
+
+    local fallback = {}
+    function fallback:CreateWindow()
+        warn("AimRare Hub: Using offline fallback UI; Rayfield download unavailable.")
+        return setmetatable({}, {
+            __index = {
+                CreateTab = function(_, _)
+                    return createTab()
+                end
+            }
+        })
+    end
+
+    function fallback:Notify(details)
+        warn("AimRare Hub Notice: " .. (details and details.Title or "Notification"))
+    end
+
+    function fallback:Destroy() end
+
+    return fallback
+end
+
 local function registerOption(flag, object)
     if flag then
         RayfieldOptions[flag] = object
@@ -538,10 +645,17 @@ end
 
 local function SetupUI()
     local success, lib = pcall(function()
-        return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+        return _G.AimRareRayfieldCache or loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
     end)
 
-    if success and lib then
+    if not success or not lib then
+        warn("AimRare Hub: Failed to download Rayfield UI. Falling back to cached or offline UI.")
+        lib = _G.AimRareRayfieldCache or createFallbackRayfield()
+    else
+        _G.AimRareRayfieldCache = lib
+    end
+
+    if lib then
         Rayfield = lib
 
         local preferredTheme = "Dark"
@@ -1163,9 +1277,9 @@ local function UpdateTriggerbot(dt, mouseLoc, aimingActive)
         if tick() - LastShotTime < rateSec then return end
         LastShotTime = tick()
         pcall(function()
-            mouse1press()
+            pressMouse1()
             task.wait(0.02)
-            mouse1release()
+            releaseMouse1()
         end)
     end)
 end
@@ -1199,7 +1313,9 @@ local function DrawHealthESP(objs, boxPos, boxHeight, healthPercent)
 end
 
 local function DrawSkeleton(char, hum, cache, color)
-    local connections = (hum.RigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
+    local rigType = hum.RigType
+    ensureSkeletonLineCache(cache, rigType)
+    local connections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
     for i, pair in ipairs(connections) do
         local pA = char:FindFirstChild(pair[1])
         local pB = char:FindFirstChild(pair[2])
@@ -1208,15 +1324,14 @@ local function DrawSkeleton(char, hum, cache, color)
             local vA, visA = GetViewportPosition(pA)
             local vB, visB = GetViewportPosition(pB)
 
-            if visA and visB then
-                if not cache.SkeletonLines[i] then cache.SkeletonLines[i] = createLine() end
-                local line = cache.SkeletonLines[i]
+            local line = cache.SkeletonLines[i]
+            if visA and visB and line then
                 line.From = Vector2new(vA.X, vA.Y)
                 line.To = Vector2new(vB.X, vB.Y)
                 line.Color = color
                 line.Visible = true
-            elseif cache.SkeletonLines[i] then
-                cache.SkeletonLines[i].Visible = false
+            elseif line then
+                line.Visible = false
             end
         elseif cache.SkeletonLines[i] then
             cache.SkeletonLines[i].Visible = false
