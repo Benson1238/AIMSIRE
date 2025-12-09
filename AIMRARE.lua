@@ -147,6 +147,7 @@ local R6_Connections = {
 local function ensureSkeletonLineCache(cache, rigType)
     cache.SkeletonLines = cache.SkeletonLines or {}
     cache._lastRigType = cache._lastRigType or rigType
+    cache._skeletonActive = cache._skeletonActive or false
 
     if cache._lastRigType ~= rigType then
         for i = #cache.SkeletonLines, 1, -1 do
@@ -164,6 +165,21 @@ local function ensureSkeletonLineCache(cache, rigType)
             cache.SkeletonLines[i] = createLine()
         end
     end
+end
+
+local function clearSkeletonLines(cache)
+    if not (cache and cache.SkeletonLines) then return end
+
+    for i = #cache.SkeletonLines, 1, -1 do
+        local line = cache.SkeletonLines[i]
+        if line and line.Remove then
+            line:Remove()
+        end
+        cache.SkeletonLines[i] = nil
+    end
+
+    cache._lastRigType = nil
+    cache._skeletonActive = false
 end
 
 -- Cache & Globals
@@ -369,8 +385,12 @@ local function HideAllESP()
             if cache.Objects.Distance then cache.Objects.Distance.Visible = false end
         end
         if cache.SkeletonLines then
-            for _, line in pairs(cache.SkeletonLines) do
-                line.Visible = false
+            if Settings.SkeletonESP then
+                for _, line in pairs(cache.SkeletonLines) do
+                    line.Visible = false
+                end
+            else
+                clearSkeletonLines(cache)
             end
         end
     end
@@ -1314,6 +1334,7 @@ end
 local function DrawSkeleton(char, hum, cache, color)
     local rigType = hum.RigType
     ensureSkeletonLineCache(cache, rigType)
+    cache._skeletonActive = true
     local connections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
     local posCache = {}
 
@@ -1446,7 +1467,9 @@ local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
             if skeletonEnabled then
                 DrawSkeleton(char, hum, cache, colorProfile)
             else
-                for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+                if cache._skeletonActive then
+                    clearSkeletonLines(cache)
+                end
             end
 
             -- Occlusion ESP tinting
@@ -1462,7 +1485,11 @@ local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
             if objs.HealthOutline then objs.HealthOutline.Visible = false end
             if objs.Name then objs.Name.Visible = false end
             if objs.Distance then objs.Distance.Visible = false end
-            for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+            if Settings.SkeletonESP then
+                for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
+            elseif cache._skeletonActive then
+                clearSkeletonLines(cache)
+            end
         end
     end
 end
