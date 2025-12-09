@@ -1,7 +1,7 @@
 --[[
     AIMRARE X
     Version: 10.0 (stability, performance, and memory fixes)
-    Author: Ben
+    Author: Ben, UnerWarT And Kiriko
     Changelog:
     - Hardened raycast parameter handling to avoid shared filter mutations and visibility race conditions.
     - Added cache cleanup for velocity, accessories, and ESP data when players leave to stop memory leaks.
