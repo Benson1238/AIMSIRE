@@ -900,7 +900,7 @@ local function SetupUI()
             end
         }))
 
-        local aimBindDefault = coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E)
+        local aimBindDefault = keybindToText(coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E), "E")
         registerOption("AimBind", legitTab:CreateKeybind({
             Name = "AimBind",
             CurrentKeybind = aimBindDefault,
@@ -909,7 +909,7 @@ local function SetupUI()
             Callback = function(key)
                 Settings.AimBind = sanitizeEnum(key, Settings.AimBind)
                 if RayfieldOptions.AimBind and RayfieldOptions.AimBind.Set then
-                    RayfieldOptions.AimBind:Set(coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E))
+                    RayfieldOptions.AimBind:Set(keybindToText(coerceKeycodeForUI(Settings.AimBind, Enum.KeyCode.E), "E"))
                 end
             end
         }))
@@ -1059,7 +1059,7 @@ local function SetupUI()
             end
         }))
 
-        local aimBindSecondaryDefault = coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T)
+        local aimBindSecondaryDefault = keybindToText(coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T), "T")
         registerOption("AimBindSecondary", legitTab:CreateKeybind({
             Name = "Secondary AimBind",
             CurrentKeybind = aimBindSecondaryDefault,
@@ -1068,7 +1068,7 @@ local function SetupUI()
             Callback = function(key)
                 Settings.AimBindSecondary = sanitizeEnum(key, Settings.AimBindSecondary)
                 if RayfieldOptions.AimBindSecondary and RayfieldOptions.AimBindSecondary.Set then
-                    RayfieldOptions.AimBindSecondary:Set(coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T))
+                    RayfieldOptions.AimBindSecondary:Set(keybindToText(coerceKeycodeForUI(Settings.AimBindSecondary, Enum.KeyCode.T), "T"))
                 end
             end
         }))
