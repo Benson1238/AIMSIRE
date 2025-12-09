@@ -1,6 +1,6 @@
 --[[
     AimRare Hub
-    Version: 7.3 (Wall Check UI Toggle)
+    Version: 7.4 (Wall Check UI Toggle)
     Author: Ben
     Changelog:
     - Added a visible Wall Check toggle to the UI so raycast filtering can be enabled without editing code.
