@@ -1232,8 +1232,7 @@ local function UpdateAimbot(dt, primaryState, secondaryState)
     return shouldAim
 end
 
--- Triggerbot implementation using camera->mouse raycast
-local function UpdateTriggerbot(dt, mouseLoc, aimingActive)
+local function RunTriggerbot(dt, mouseLoc, aimingActive)
     if not Settings.TriggerbotEnabled then return end
     if Settings.TriggerbotRequiresAimbot and not aimingActive then return end
     if Settings.TriggerbotHoldBind and not GetBindState("TriggerbotHoldBind") then return end
@@ -1316,25 +1315,34 @@ local function DrawSkeleton(char, hum, cache, color)
     local rigType = hum.RigType
     ensureSkeletonLineCache(cache, rigType)
     local connections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
-    for i, pair in ipairs(connections) do
-        local pA = char:FindFirstChild(pair[1])
-        local pB = char:FindFirstChild(pair[2])
+    local posCache = {}
 
-        if pA and pB then
-            local vA, visA = GetViewportPosition(pA)
-            local vB, visB = GetViewportPosition(pB)
-
-            local line = cache.SkeletonLines[i]
-            if visA and visB and line then
-                line.From = Vector2new(vA.X, vA.Y)
-                line.To = Vector2new(vB.X, vB.Y)
-                line.Color = color
-                line.Visible = true
-            elseif line then
-                line.Visible = false
+    for _, pair in ipairs(connections) do
+        for _, boneName in ipairs(pair) do
+            if not posCache[boneName] then
+                local bone = char:FindFirstChild(boneName)
+                if bone then
+                    local pos, vis = GetViewportPosition(bone)
+                    posCache[boneName] = { pos = pos, visible = vis }
+                else
+                    posCache[boneName] = false
+                end
             end
-        elseif cache.SkeletonLines[i] then
-            cache.SkeletonLines[i].Visible = false
+        end
+    end
+
+    for i, pair in ipairs(connections) do
+        local boneA = posCache[pair[1]]
+        local boneB = posCache[pair[2]]
+        local line = cache.SkeletonLines[i]
+
+        if boneA and boneB and line and boneA.visible and boneB.visible then
+            line.From = Vector2new(boneA.pos.X, boneA.pos.Y)
+            line.To = Vector2new(boneB.pos.X, boneB.pos.Y)
+            line.Color = color
+            line.Visible = true
+        elseif line then
+            line.Visible = false
         end
     end
 end
@@ -1482,6 +1490,6 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
     local secondaryState = GetBindState("AimBindSecondary")
     local aimingActive = UpdateAimbot(dt, primaryState, secondaryState)
 
-    UpdateTriggerbot(dt, mouseLoc, aimingActive)
+    RunTriggerbot(dt, mouseLoc, aimingActive)
     UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
 end)
