@@ -135,6 +135,31 @@ local R6_Connections = {
     {"Head","Torso"}, {"Torso","Left Arm"}, {"Torso","Right Arm"}, {"Torso","Left Leg"}, {"Torso","Right Leg"}
 }
 
+-- Cache & Globals
+local ESP_Cache = {}
+local FOV_Circle_Legit = nil
+local LegitTarget = nil
+local WatermarkText = nil
+local RenderConnection = nil -- Handle for the loop
+local RayParamsDefault = RaycastParams.new()
+RayParamsDefault.FilterType = Enum.RaycastFilterType.Exclude
+RayParamsDefault.IgnoreWater = true
+local RayParamsIgnoreAccessories = RaycastParams.new()
+RayParamsIgnoreAccessories.FilterType = Enum.RaycastFilterType.Exclude
+RayParamsIgnoreAccessories.IgnoreWater = true
+local RayParamsIgnoreTeam = RaycastParams.new()
+RayParamsIgnoreTeam.FilterType = Enum.RaycastFilterType.Exclude
+RayParamsIgnoreTeam.IgnoreWater = true
+local RayIgnore = {}
+local LastVisibilityResult = {}
+local LastVelocityCache = {}
+local AccessoryCache = {}
+local ViewportCache = {}
+local ViewportFrame = 0
+local EspAccumulator = 0
+local AimToggleState = false
+local LastPrimaryState, LastSecondaryState = false, false
+
 local function ensureSkeletonLineCache(cache, rigType)
     cache.SkeletonLines = cache.SkeletonLines or {}
     cache._lastRigType = cache._lastRigType or rigType
@@ -178,31 +203,6 @@ local function clearAllSkeletons()
         clearSkeletonLines(cache)
     end
 end
-
--- Cache & Globals
-local ESP_Cache = {}
-local FOV_Circle_Legit = nil
-local LegitTarget = nil
-local WatermarkText = nil
-local RenderConnection = nil -- Handle for the loop
-local RayParamsDefault = RaycastParams.new()
-RayParamsDefault.FilterType = Enum.RaycastFilterType.Exclude
-RayParamsDefault.IgnoreWater = true
-local RayParamsIgnoreAccessories = RaycastParams.new()
-RayParamsIgnoreAccessories.FilterType = Enum.RaycastFilterType.Exclude
-RayParamsIgnoreAccessories.IgnoreWater = true
-local RayParamsIgnoreTeam = RaycastParams.new()
-RayParamsIgnoreTeam.FilterType = Enum.RaycastFilterType.Exclude
-RayParamsIgnoreTeam.IgnoreWater = true
-local RayIgnore = {}
-local LastVisibilityResult = {}
-local LastVelocityCache = {}
-local AccessoryCache = {}
-local ViewportCache = {}
-local ViewportFrame = 0
-local EspAccumulator = 0
-local AimToggleState = false
-local LastPrimaryState, LastSecondaryState = false, false
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
