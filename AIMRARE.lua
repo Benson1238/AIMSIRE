@@ -1902,3 +1902,4 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
     UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
     CleanupStaleCaches(dt)
 end)
+--code writen by: Ben, UnerWarT And Kiriko
