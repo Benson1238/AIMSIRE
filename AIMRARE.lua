@@ -181,17 +181,27 @@ RayParamsIgnoreAccessories.IgnoreWater = true
 local RayParamsIgnoreTeam = RaycastParams.new()
 RayParamsIgnoreTeam.FilterType = Enum.RaycastFilterType.Exclude
 RayParamsIgnoreTeam.IgnoreWater = true
-local RayIgnore = {}
+local RayIgnoreDefault = {}
+local RayIgnoreAccessories = {}
+local RayIgnoreTeam = {}
+
+RayParamsDefault.FilterDescendantsInstances = RayIgnoreDefault
+RayParamsIgnoreAccessories.FilterDescendantsInstances = RayIgnoreAccessories
+RayParamsIgnoreTeam.FilterDescendantsInstances = RayIgnoreTeam
 local LastVisibilityResult = {}
 local LastVelocityCache = {}
 local AccessoryCache = {}
 local ViewportCache = {}
 local ViewportFrame = 0
 local EspAccumulator = 0
+local LastRenderDt = 1 / 60
 local AimToggleState = false
 local LastPrimaryState, LastSecondaryState = false, false
 local LastTriggerTime = 0
 local LastShotTime = 0
+local LastUIUpdateTime = 0
+local LastWatermarkTarget = ""
+local LastWatermarkPredSpeed = Settings.PredictionSpeed
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
@@ -231,11 +241,7 @@ end
 local function GetBindState(settingKey)
     local bind = Settings[settingKey]
     if type(bind) == "string" then
-        local normalized = sanitizeEnum(bind)
-        if normalized then
-            Settings[settingKey] = normalized
-            bind = normalized
-        end
+        bind = sanitizeEnum(bind)
     end
     if typeof(bind) == "EnumItem" then
         if bind.EnumType == Enum.UserInputType then
@@ -351,6 +357,12 @@ local function removeESP(player)
     end
     LastVelocityCache[player] = nil
     LastVisibilityResult[player] = nil
+    for character, cache in pairs(AccessoryCache) do
+        local owner = cache and cache.__instance and Players:GetPlayerFromCharacter(cache.__instance)
+        if owner == player or character == player.Character or (typeof(character) == "Instance" and character.Parent == nil) then
+            AccessoryCache[character] = nil
+        end
+    end
 end
 Players.PlayerRemoving:Connect(removeESP)
 
@@ -383,6 +395,7 @@ end
 -- Raycast parameter provider to reduce allocations while supporting variations
 local function GetRayParams(ignoreAccessories, ignoreTeam)
     local params
+    local ignoreList
     if ignoreTeam then
         params = RayParamsIgnoreTeam
     elseif ignoreAccessories then
@@ -390,10 +403,17 @@ local function GetRayParams(ignoreAccessories, ignoreTeam)
     else
         params = RayParamsDefault
     end
-    table.clear(RayIgnore)
-    RayIgnore[1] = LocalPlayer.Character or Workspace.CurrentCamera
-    params.FilterDescendantsInstances = RayIgnore
-    return params, RayIgnore
+    if ignoreTeam then
+        ignoreList = RayIgnoreTeam
+    elseif ignoreAccessories then
+        ignoreList = RayIgnoreAccessories
+    else
+        ignoreList = RayIgnoreDefault
+    end
+
+    table.clear(ignoreList)
+    ignoreList[1] = LocalPlayer.Character or Workspace.CurrentCamera
+    return params, ignoreList
 end
 
 -- Cache accessory lists per character to avoid repeated scans
@@ -425,6 +445,20 @@ local function GetViewportPosition(part)
     local pos, visible = Camera:WorldToViewportPoint(part.Position)
     ViewportCache[part] = { Frame = frame, Data = { pos, visible } }
     return pos, visible
+end
+
+local function CleanViewportCache()
+    if ViewportFrame % 30 ~= 0 then
+        return
+    end
+
+    for part, entry in pairs(ViewportCache) do
+        local stale = not part or (entry and entry.Frame and (ViewportFrame - entry.Frame > 120))
+        local orphaned = typeof(part) == "Instance" and part.Parent == nil
+        if stale or orphaned then
+            ViewportCache[part] = nil
+        end
+    end
 end
 
 -- Performs wall/occlusion check respecting accessory filtering and teams
@@ -459,8 +493,6 @@ local function PerformWallCheck(target, aimPart, forceEnabled)
             ignoreList[#ignoreList + 1] = accessories[i]
         end
     end
-
-    params.FilterDescendantsInstances = ignoreList
 
     local origin = Camera.CFrame.Position
     local direction = aimPart.Position - origin
@@ -1131,8 +1163,11 @@ local function easeOutQuad(t)
 end
 
 local function resolveSmoothingAlpha(dt)
+    local safeDt = math.clamp(dt or LastRenderDt, 1 / 240, 1 / 20)
+    LastRenderDt = safeDt
+
     local base = math.clamp(Settings.AimbotSmooth, 0.01, 1)
-    local scaled = 1 - math.exp(-base * (dt * 60)) -- frame-rate independent blend
+    local scaled = 1 - math.exp(-base * (safeDt * 60)) -- frame-rate independent blend
 
     if Settings.AimSmoothingCurve == "Exponential" then
         scaled = scaled * scaled
@@ -1155,6 +1190,7 @@ local function UpdateUI(dt)
     local mouseLoc = UserInputService:GetMouseLocation()
     local fovColor = Settings.FOVCircleColor or DEFAULT_FOV_COLOR
     local fps = Workspace:GetRealPhysicsFPS()
+    local now = tick()
 
     if FOV_Circle_Legit then
         FOV_Circle_Legit.Position = mouseLoc
@@ -1170,14 +1206,19 @@ local function UpdateUI(dt)
         WatermarkText.Visible = Settings.ShowWatermark
         if Settings.ShowWatermark then
             local targetName = LegitTarget and LegitTarget.Name or "None"
-            WatermarkText.Text = string.format(
-                "AimRare Hub v%s | FPS: %d | Target: %s | Pred: %d",
-                VERSION,
-                MathFloor(fps),
-                targetName,
-                Settings.PredictionSpeed
-            )
-            WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 320, 20)
+            if targetName ~= LastWatermarkTarget or Settings.PredictionSpeed ~= LastWatermarkPredSpeed or (now - LastUIUpdateTime) > 0.25 then
+                WatermarkText.Text = string.format(
+                    "AimRare Hub v%s | FPS: %d | Target: %s | Pred: %d",
+                    VERSION,
+                    MathFloor(fps),
+                    targetName,
+                    Settings.PredictionSpeed
+                )
+                WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 320, 20)
+                LastWatermarkTarget = targetName
+                LastWatermarkPredSpeed = Settings.PredictionSpeed
+                LastUIUpdateTime = now
+            end
         end
     end
 
@@ -1218,6 +1259,9 @@ local function UpdateAimbot(dt, primaryState, secondaryState)
 
             local predicted = PredictMovement(LegitTarget)
             local aimPos = predicted or aimPart.Position
+            if not aimPos or not (aimPart and aimPart.Position) then
+                return shouldAim
+            end
             local currentCFrame = Camera.CFrame
             local targetCFrame = CFrame.new(currentCFrame.Position, aimPos)
             local alpha = resolveSmoothingAlpha(dt)
@@ -1248,8 +1292,6 @@ local function UpdateTriggerbot(dt, mouseLoc, aimingActive)
     local ray = Camera:ViewportPointToRay(mouseLoc.X, mouseLoc.Y)
     local params, ignoreList = GetRayParams(Settings.IgnoreAccessories, false)
     ignoreList[2] = LocalPlayer.Character
-    params.FilterDescendantsInstances = ignoreList
-
     local result = Workspace:Raycast(ray.Origin, ray.Direction * Settings.TriggerbotMaxDistance, params)
     if not result or not result.Instance then return end
 
@@ -1436,7 +1478,11 @@ local function UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
 
             local skeletonEnabled = Settings.SkeletonESP and not (Settings.FPSSafeSkeleton and Workspace:GetRealPhysicsFPS() < 55)
             if skeletonEnabled then
-                DrawSkeleton(char, hum, cache, colorProfile)
+                local throttleFrames = Settings.FPSSafeSkeleton and 3 or 2
+                if not cache._lastSkeletonFrame or (ViewportFrame - cache._lastSkeletonFrame) >= throttleFrames then
+                    DrawSkeleton(char, hum, cache, colorProfile)
+                    cache._lastSkeletonFrame = ViewportFrame
+                end
             else
                 for _, l in pairs(cache.SkeletonLines) do l.Visible = false end
             end
@@ -1466,7 +1512,7 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
     end
 
     ViewportFrame += 1
-    table.clear(ViewportCache)
+    CleanViewportCache()
 
     local enemyColor = Settings.EnemyESPColor or DEFAULT_ESP_COLOR
     local teamColor = Settings.TeamESPColor or DEFAULT_TEAM_COLOR
