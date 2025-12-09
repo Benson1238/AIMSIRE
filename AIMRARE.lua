@@ -1511,12 +1511,13 @@ end
 
 -- UI refresh separated for clarity
 local LastFovColor, LastEnemyColor, LastTeamColor, LastLowHealthColor
+local UI_REFRESH_INTERVAL = 0.35
 local function UpdateUI(dt)
     local mouseLoc = UserInputService:GetMouseLocation()
     local fovColor = Settings.FOVCircleColor or DEFAULT_FOV_COLOR
     local fps = Workspace:GetRealPhysicsFPS()
     UIRefreshAccumulator += dt or 0
-    local shouldRefresh = UIRefreshAccumulator >= 0.15
+    local shouldRefresh = UIRefreshAccumulator >= UI_REFRESH_INTERVAL
     if shouldRefresh then
         UIRefreshAccumulator = 0
     end
@@ -1535,29 +1536,33 @@ local function UpdateUI(dt)
         WatermarkText.Visible = Settings.ShowWatermark
         if Settings.ShowWatermark then
             local targetName = LegitTarget and LegitTarget.Name or "None"
-            WatermarkText.Text = string.format(
+            local safeText = string.format(
                 "AIMRARE X v%s | FPS: %d | Target: %s | Pred: %d",
                 VERSION,
                 MathFloor(fps),
                 targetName,
                 Settings.PredictionSpeed
             )
+            WatermarkText.Text = safeText
             WatermarkText.Position = Vector2new(Camera.ViewportSize.X - 320, 20)
         end
     end
 
-    if DebugParagraph and shouldRefresh then
+    if DebugParagraph and shouldRefresh and type(DebugParagraph.Set) == "function" then
         local targetName = LegitTarget and LegitTarget.Name or "None"
         local velocity = LegitTarget and tostring((LastVelocityCache[LegitTarget] or Vector3.zero).Magnitude) or "0"
         local visible = LegitTarget and (LastVisibilityResult[LegitTarget] and tostring(LastVisibilityResult[LegitTarget].Visible)) or "N/A"
-        DebugParagraph:Set(string.format(
+        local debugText = string.format(
             "Target: %s\nPrediction: %.0f\nVelocity: %s\nVisible: %s\nHitChance: %d",
             targetName,
             Settings.PredictionSpeed,
             velocity,
             visible,
             Settings.AimbotHitChance
-        ))
+        )
+        if debugText then
+            pcall(DebugParagraph.Set, DebugParagraph, debugText)
+        end
     end
 
     return mouseLoc
