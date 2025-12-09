@@ -135,7 +135,6 @@ local R6_Connections = {
     {"Head","Torso"}, {"Torso","Left Arm"}, {"Torso","Right Arm"}, {"Torso","Left Leg"}, {"Torso","Right Leg"}
 }
 
--- Cache & Globals
 local ESP_Cache = {}
 local FOV_Circle_Legit = nil
 local LegitTarget = nil
@@ -160,49 +159,8 @@ local EspAccumulator = 0
 local AimToggleState = false
 local LastPrimaryState, LastSecondaryState = false, false
 
-local function ensureSkeletonLineCache(cache, rigType)
-    cache.SkeletonLines = cache.SkeletonLines or {}
-    cache._lastRigType = cache._lastRigType or rigType
-    cache._skeletonActive = cache._skeletonActive or false
-
-    if cache._lastRigType ~= rigType then
-        for i = #cache.SkeletonLines, 1, -1 do
-            if cache.SkeletonLines[i] and cache.SkeletonLines[i].Remove then
-                cache.SkeletonLines[i]:Remove()
-            end
-            cache.SkeletonLines[i] = nil
-        end
-        cache._lastRigType = rigType
-    end
-
-    local targetConnections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
-    for i = 1, #targetConnections do
-        if not cache.SkeletonLines[i] then
-            cache.SkeletonLines[i] = createLine()
-        end
-    end
-end
-
-local function clearSkeletonLines(cache)
-    if not (cache and cache.SkeletonLines) then return end
-
-    for i = #cache.SkeletonLines, 1, -1 do
-        local line = cache.SkeletonLines[i]
-        if line and line.Remove then
-            line:Remove()
-        end
-        cache.SkeletonLines[i] = nil
-    end
-
-    cache._lastRigType = nil
-    cache._skeletonActive = false
-end
-
-local function clearAllSkeletons()
-    for _, cache in pairs(ESP_Cache) do
-        clearSkeletonLines(cache)
-    end
-end
+local clearSkeletonLines -- forward declarations for drawing helpers
+local clearAllSkeletons
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
@@ -318,6 +276,50 @@ local function createLine()
     line.Transparency = 1
     line.Visible = false
     return line
+end
+
+local function ensureSkeletonLineCache(cache, rigType)
+    cache.SkeletonLines = cache.SkeletonLines or {}
+    cache._lastRigType = cache._lastRigType or rigType
+    cache._skeletonActive = cache._skeletonActive or false
+
+    if cache._lastRigType ~= rigType then
+        for i = #cache.SkeletonLines, 1, -1 do
+            if cache.SkeletonLines[i] and cache.SkeletonLines[i].Remove then
+                cache.SkeletonLines[i]:Remove()
+            end
+            cache.SkeletonLines[i] = nil
+        end
+        cache._lastRigType = rigType
+    end
+
+    local targetConnections = (rigType == Enum.HumanoidRigType.R15) and R15_Connections or R6_Connections
+    for i = 1, #targetConnections do
+        if not cache.SkeletonLines[i] then
+            cache.SkeletonLines[i] = createLine()
+        end
+    end
+end
+
+function clearSkeletonLines(cache)
+    if not (cache and cache.SkeletonLines) then return end
+
+    for i = #cache.SkeletonLines, 1, -1 do
+        local line = cache.SkeletonLines[i]
+        if line and line.Remove then
+            line:Remove()
+        end
+        cache.SkeletonLines[i] = nil
+    end
+
+    cache._lastRigType = nil
+    cache._skeletonActive = false
+end
+
+function clearAllSkeletons()
+    for _, cache in pairs(ESP_Cache) do
+        clearSkeletonLines(cache)
+    end
 end
 
 local function createBoxStructure()
@@ -652,7 +654,12 @@ end
 
 local function keybindToText(value, fallback)
     if typeof(value) == "EnumItem" then
-        return value.Name
+        if value.EnumType == Enum.KeyCode then
+            return value.Name
+        elseif value.EnumType == Enum.UserInputType then
+            -- Rayfield keybinds expect KeyCodes; fall back to a safe display key for mouse binds
+            return fallback or "E"
+        end
     elseif type(value) == "string" then
         return value
     end
@@ -706,7 +713,7 @@ local function SetupUI()
 
         registerOption("AimBind", legitTab:CreateKeybind({
             Name = "AimBind",
-            CurrentKeybind = keybindToText(Settings.AimBind, "MouseButton2"),
+            CurrentKeybind = keybindToText(Settings.AimBind, "E"),
             HoldToInteract = true,
             Flag = "AimBind",
             Callback = function(key)
@@ -812,7 +819,7 @@ local function SetupUI()
 
         registerOption("AimBindSecondary", legitTab:CreateKeybind({
             Name = "Secondary AimBind",
-            CurrentKeybind = keybindToText(Settings.AimBindSecondary, "MouseButton3"),
+            CurrentKeybind = keybindToText(Settings.AimBindSecondary, "T"),
             HoldToInteract = true,
             Flag = "AimBindSecondary",
             Callback = function(key)
