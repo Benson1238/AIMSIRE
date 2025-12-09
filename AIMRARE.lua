@@ -80,15 +80,6 @@ local Settings = {
     VisibilityDelay = 0,
     IgnoreAccessories = false,
 
-    -- Triggerbot
-    TriggerbotEnabled = false,
-    TriggerbotDelay = 50,
-    TriggerbotFireRate = 120,
-    TriggerbotHoldBind = Enum.UserInputType.MouseButton1,
-    TriggerbotRequiresAimbot = false,
-    TriggerbotTeamCheck = true,
-    TriggerbotWallCheck = true,
-    TriggerbotMaxDistance = 500,
 }
 
 local MOUSE_INPUT_ALIASES = {
@@ -182,6 +173,12 @@ local function clearSkeletonLines(cache)
     cache._skeletonActive = false
 end
 
+local function clearAllSkeletons()
+    for _, cache in pairs(ESP_Cache) do
+        clearSkeletonLines(cache)
+    end
+end
+
 -- Cache & Globals
 local ESP_Cache = {}
 local FOV_Circle_Legit = nil
@@ -206,8 +203,6 @@ local ViewportFrame = 0
 local EspAccumulator = 0
 local AimToggleState = false
 local LastPrimaryState, LastSecondaryState = false, false
-local LastTriggerTime = 0
-local LastShotTime = 0
 
 -- Initialize FOV Circle and Watermark
 pcall(function()
@@ -237,6 +232,7 @@ local UPDATE_LOG = {
     "Rayfield theme fallback keeps the UI stable when preferred assets are missing",
     "Advanced prediction modes with curve tuning and smoothing",
     "New aim activation modes, secondary bind, and target prioritization",
+    "Triggerbot removed because it made coding and debugging unnecessarily difficult",
 }
 
 local function GetEspInterval()
@@ -876,87 +872,6 @@ local function SetupUI()
             end
         }))
 
-        legitTab:CreateSection("Triggerbot")
-
-        registerOption("TriggerbotEnabled", legitTab:CreateToggle({
-            Name = "Triggerbot Enabled",
-            CurrentValue = Settings.TriggerbotEnabled,
-            Flag = "TriggerbotEnabled",
-            Callback = function(value)
-                Settings.TriggerbotEnabled = value
-            end
-        }))
-
-        registerOption("TriggerbotHoldBind", legitTab:CreateKeybind({
-            Name = "Triggerbot Bind",
-            CurrentKeybind = keybindToText(Settings.TriggerbotHoldBind, "MouseButton1"),
-            HoldToInteract = true,
-            Flag = "TriggerbotHoldBind",
-            Callback = function(key)
-                Settings.TriggerbotHoldBind = sanitizeEnum(key, Settings.TriggerbotHoldBind)
-            end
-        }))
-
-        registerOption("TriggerbotDelay", legitTab:CreateSlider({
-            Name = "Shot Delay (ms)",
-            Range = {0, 250},
-            Increment = 5,
-            CurrentValue = Settings.TriggerbotDelay,
-            Flag = "TriggerbotDelay",
-            Callback = function(value)
-                Settings.TriggerbotDelay = value
-            end
-        }))
-
-        registerOption("TriggerbotFireRate", legitTab:CreateSlider({
-            Name = "Fire Rate Limit (ms)",
-            Range = {50, 500},
-            Increment = 5,
-            CurrentValue = Settings.TriggerbotFireRate,
-            Flag = "TriggerbotFireRate",
-            Callback = function(value)
-                Settings.TriggerbotFireRate = value
-            end
-        }))
-
-        registerOption("TriggerbotRequiresAimbot", legitTab:CreateToggle({
-            Name = "Only Shoot When Aimbot Active",
-            CurrentValue = Settings.TriggerbotRequiresAimbot,
-            Flag = "TriggerbotRequiresAimbot",
-            Callback = function(value)
-                Settings.TriggerbotRequiresAimbot = value
-            end
-        }))
-
-        registerOption("TriggerbotTeamCheck", legitTab:CreateToggle({
-            Name = "Triggerbot Team Check",
-            CurrentValue = Settings.TriggerbotTeamCheck,
-            Flag = "TriggerbotTeamCheck",
-            Callback = function(value)
-                Settings.TriggerbotTeamCheck = value
-            end
-        }))
-
-        registerOption("TriggerbotWallCheck", legitTab:CreateToggle({
-            Name = "Triggerbot Wall Check",
-            CurrentValue = Settings.TriggerbotWallCheck,
-            Flag = "TriggerbotWallCheck",
-            Callback = function(value)
-                Settings.TriggerbotWallCheck = value
-            end
-        }))
-
-        registerOption("TriggerbotMaxDistance", legitTab:CreateSlider({
-            Name = "Triggerbot Max Distance",
-            Range = {50, 1000},
-            Increment = 10,
-            CurrentValue = Settings.TriggerbotMaxDistance,
-            Flag = "TriggerbotMaxDistance",
-            Callback = function(value)
-                Settings.TriggerbotMaxDistance = value
-            end
-        }))
-
         -- Visuals
         registerOption("BoxESP", visualsTab:CreateToggle({
             Name = "Box ESP",
@@ -973,6 +888,7 @@ local function SetupUI()
             Flag = "SkeletonESP",
             Callback = function(value)
                 Settings.SkeletonESP = value
+                clearAllSkeletons()
             end
         }))
 
@@ -1133,8 +1049,8 @@ local function SetupUI()
                 Duration = 8
             })
             Rayfield:Notify({
-                Title = "Triggerbot Status",
-                Content = "Triggerbot is currently under cunrstruction It will not work good or will completly not work",
+                Title = "Triggerbot Removed",
+                Content = "Triggerbot made coding and code debugging very hard so we deleted it.",
                 Duration = 10
             })
         end
@@ -1250,57 +1166,6 @@ local function UpdateAimbot(dt, primaryState, secondaryState)
         end
     end
     return shouldAim
-end
-
-local function RunTriggerbot(dt, mouseLoc, aimingActive)
-    if not Settings.TriggerbotEnabled then return end
-    if Settings.TriggerbotRequiresAimbot and not aimingActive then return end
-    if Settings.TriggerbotHoldBind and not GetBindState("TriggerbotHoldBind") then return end
-
-    local now = tick()
-    local delaySec = Settings.TriggerbotDelay / 1000
-    local rateSec = Settings.TriggerbotFireRate / 1000
-    if now - LastShotTime < rateSec or now - LastTriggerTime < delaySec then
-        return
-    end
-
-    local ray = Camera:ViewportPointToRay(mouseLoc.X, mouseLoc.Y)
-    local params, ignoreList = GetRayParams(Settings.IgnoreAccessories, false)
-    ignoreList[2] = LocalPlayer.Character
-    params.FilterDescendantsInstances = ignoreList
-
-    local result = Workspace:Raycast(ray.Origin, ray.Direction * Settings.TriggerbotMaxDistance, params)
-    if not result or not result.Instance then return end
-
-    local model = result.Instance:FindFirstAncestorWhichIsA("Model")
-    if not model then return end
-    local player = Players:GetPlayerFromCharacter(model)
-    if not player or player == LocalPlayer then return end
-
-    if Settings.TriggerbotTeamCheck and player.Team == LocalPlayer.Team then return end
-
-    local hitPartName = result.Instance.Name
-    local important = hitPartName == "Head" or hitPartName == "HumanoidRootPart" or hitPartName == "UpperTorso"
-    if not important then return end
-
-    if Settings.TriggerbotWallCheck and not PerformWallCheck(player, result.Instance, true) then
-        return
-    end
-
-    local distance = (result.Position - Camera.CFrame.Position).Magnitude
-    if distance > Settings.TriggerbotMaxDistance then return end
-
-    -- Apply the shot after respecting delay and rate limits
-    LastTriggerTime = now
-    task.delay(delaySec, function()
-        if tick() - LastShotTime < rateSec then return end
-        LastShotTime = tick()
-        pcall(function()
-            pressMouse1()
-            task.wait(0.02)
-            releaseMouse1()
-        end)
-    end)
 end
 
 -- ESP drawing helpers
@@ -1516,7 +1381,5 @@ RenderConnection = RunService.RenderStepped:Connect(function(dt)
     local primaryState = GetBindState("AimBind")
     local secondaryState = GetBindState("AimBindSecondary")
     local aimingActive = UpdateAimbot(dt, primaryState, secondaryState)
-
-    RunTriggerbot(dt, mouseLoc, aimingActive)
     UpdateESP(dt, enemyColor, teamColor, lowHealthColor)
 end)
